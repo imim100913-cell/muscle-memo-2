@@ -1,0 +1,40 @@
+{
+  "name": "マッスルメモ 2.0 - AIフィットネスパートナー",
+  "short_name": "マッスルメモ2",
+  "description": "AIトレーナーがあなたの限界突破をサポートする、スマート筋トレ記録アプリ「マッスルメモ 2.0」",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F8FAFC",
+  "theme_color": "#2563EB",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./coach_all_might.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "トレーニングを開始",
+      "short_name": "記録開始",
+      "description": "本日のトレーニングセッションをすぐに開始します",
+      "url": "./?tab=home"
+    },
+    {
+      "name": "履歴・1RM推移を確認",
+      "short_name": "履歴・分析",
+      "description": "これまでの成長記録と1RMグラフを確認します",
+      "url": "./?tab=history"
+    }
+  ]
+}

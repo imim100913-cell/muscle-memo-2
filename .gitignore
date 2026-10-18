@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Android local build & SDK paths
+muscle-memo-android/local.properties
+muscle-memo-android/.gradle/
+muscle-memo-android/**/build/
+muscle-memo-android/.idea/
+**/local.properties
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

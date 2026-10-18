@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E40AF" />
+      <stop offset="50%" stop-color="#2563EB" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+    <linearGradient id="metalGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#DBEAFE" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#bgGrad)" />
+  <circle cx="256" cy="256" r="210" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="8" />
+  <g transform="translate(256, 256) rotate(-35) translate(-256, -256)">
+    <!-- Barbell Shaft -->
+    <rect x="136" y="240" width="240" height="32" rx="8" fill="url(#metalGrad)" />
+    <!-- Inner Plates -->
+    <rect x="104" y="166" width="38" height="180" rx="14" fill="#FFFFFF" />
+    <rect x="370" y="166" width="38" height="180" rx="14" fill="#FFFFFF" />
+    <!-- Outer Plates -->
+    <rect x="64" y="196" width="32" height="120" rx="12" fill="#93C5FD" />
+    <rect x="416" y="196" width="32" height="120" rx="12" fill="#93C5FD" />
+    <!-- End Caps -->
+    <rect x="40" y="236" width="18" height="40" rx="6" fill="#FBBF24" />
+    <rect x="454" y="236" width="18" height="40" rx="6" fill="#FBBF24" />
+  </g>
+</svg>

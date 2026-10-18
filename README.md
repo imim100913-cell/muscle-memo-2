@@ -1,16 +1,28 @@
-# React + Vite
+# マッスルメモ 2.0 (Muscle Memo 2.0)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+AIトレーナーがあなたの限界突破をサポートする、スマート筋トレ記録PWAアプリ **「マッスルメモ 2.0」** です。
 
-Currently, two official plugins are available:
+## 主な特徴
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **科学的な負荷設計エンジン (Anti-Gravity 2.0)**：前回の挙上重量・回数・余力（RIR）・フォーム品質から、4週間のメゾサイクルに基づいた次回の推奨ターゲット（重量・レップ数・目標RIR・最適インターバル）を自動算出します。
+- **4人の専属AIトレーナー (Gemini API連携)**：熱血コーチ・スパルタ鬼コーチ・癒やし系コーチ・論理派コーチから選択可能。オフライン時やAPI未設定時もローカル応答で動作します。
+- **スマホ完全対応 PWA**：
+  - ホーム画面に追加してフルスクリーンアプリとして起動（オフライン対応・ワンタップ自動更新）。
+  - **Screen Wake Lock API** によるトレーニング中・インターバル中の画面スリープ防止。
+  - **Web Vibration API & Notification API** による触覚フィードバックとインターバル終了通知。
+  - **どこでもURLデータ移行（Deflate圧縮トークン）＆ JSON/CSVバックアップ** による端末間のスマートデータ統合。
 
-## React Compiler
+## クラウド開発（OpenAI Codex / GitHub Codespaces）＆ ローカル開発
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+詳細なアーキテクチャやコーディング規約は [AGENTS.md](./AGENTS.md) を参照してください。
 
-## Expanding the ESLint configuration
+```bash
+npm install
+npm run dev      # 開発サーバー起動
+npm run lint     # ESLintチェック
+npm run build    # 本番ビルド (dist/)
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## デプロイ (GitHub Pages)
+
+`main` ブランチへプッシュすると、GitHub Actions (`.github/workflows/deploy.yml`) により自動的に GitHub Pages へ最新版がデプロイされます。
