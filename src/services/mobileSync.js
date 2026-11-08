@@ -1,3 +1,5 @@
+import { mergeWorkoutSets, migrateToFlatWorkouts } from '../lib/workoutMigration.js';
+
 /**
  * Anti-Gravity 2.0: PC <=> Smartphone Instant Bridge & Smart Data Merge Service
  * Supports:
@@ -6,7 +8,7 @@
  * 3. Non-destructive smart workout merging (combines PC and Smartphone logs without data loss)
  */
 
-export function collectLocalSyncData(includeApiKey = true) {
+export function collectLocalSyncData(includeApiKey = false) {
   const data = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
@@ -40,6 +42,17 @@ export function applySyncedData(incomingData, mode = 'merge') {
   if (mode === 'overwrite') {
     Object.entries(incomingData).forEach(([k, v]) => {
       if (k.startsWith('muscle-memo-') && typeof v === 'string') {
+        if (k === 'muscle-memo-workouts') {
+          try {
+            const parsed = JSON.parse(v);
+            const flat = migrateToFlatWorkouts(parsed);
+            localStorage.setItem(k, JSON.stringify(flat));
+            updatedKeys.push(k);
+            return;
+          } catch {
+            // fallback
+          }
+        }
         localStorage.setItem(k, v);
         updatedKeys.push(k);
       }
@@ -47,7 +60,7 @@ export function applySyncedData(incomingData, mode = 'merge') {
     return { mergedSessionsCount: 0, updatedKeys };
   }
 
-  // Smart Merge Mode
+  // Smart Merge Mode (Zero Duplicates & Automatic Migration to 1 set per record)
   Object.entries(incomingData).forEach(([key, incomingRaw]) => {
     if (!key.startsWith('muscle-memo-') || typeof incomingRaw !== 'string') return;
 
@@ -58,39 +71,7 @@ export function applySyncedData(incomingData, mode = 'merge') {
         const localList = localRaw ? JSON.parse(localRaw) : [];
 
         if (Array.isArray(incomingList) && Array.isArray(localList)) {
-          const map = new Map();
-
-          const countSets = (rec) => {
-            let count = 0;
-            for (let i = 1; i <= 30; i++) {
-              if (rec[`set${i}_weight`] !== undefined && rec[`set${i}_weight`] !== null && rec[`set${i}_weight`] !== '') {
-                count++;
-              }
-            }
-            return count;
-          };
-
-          localList.forEach((rec) => {
-            const k = `${rec.date || ''}_${rec.exercise || rec.id}`;
-            map.set(k, rec);
-          });
-
-          incomingList.forEach((inc) => {
-            const k = `${inc.date || ''}_${inc.exercise || inc.id}`;
-            const existing = map.get(k);
-            if (!existing) {
-              map.set(k, inc);
-            } else {
-              // Keep record with more logged sets, or newer timestamp
-              const incSets = countSets(inc);
-              const extSets = countSets(existing);
-              if (incSets > extSets || (incSets === extSets && (inc.timestamp || 0) > (existing.timestamp || 0))) {
-                map.set(k, inc);
-              }
-            }
-          });
-
-          const merged = Array.from(map.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          const merged = mergeWorkoutSets(localList, incomingList);
           mergedSessionsCount = merged.length;
           localStorage.setItem('muscle-memo-workouts', JSON.stringify(merged));
           updatedKeys.push(key);
@@ -166,7 +147,7 @@ export async function fetchNetworkInfo() {
 /**
  * Pushes current device's localStorage state to the Vite Mobile Bridge server.
  */
-export async function pushSyncSnapshotToServer(sourceDevice = 'PC', includeApiKey = true) {
+export async function pushSyncSnapshotToServer(sourceDevice = 'PC', includeApiKey = false) {
   const data = collectLocalSyncData(includeApiKey);
   const res = await fetch('/api/sync-state', {
     method: 'POST',
@@ -196,7 +177,7 @@ export async function pullSyncSnapshotFromServer() {
 /**
  * Encodes sync data into a compact URL-safe token (using CompressionStream when supported).
  */
-export async function encodeSyncToken(includeApiKey = true) {
+export async function encodeSyncToken(includeApiKey = false) {
   const payloadObj = {
     v: 2,
     t: Date.now(),

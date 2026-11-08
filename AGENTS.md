@@ -36,9 +36,9 @@ npm run dev
 ## 3. Data Storage & Conventions
 
 - **Local Storage Keys**:
-  - `muscle-memo-workouts`: Array of horizontal session records (`{ id, date, timestamp, part, exercise, set1_weight, set1_reps, set1_rir, set1_form, set1_interval, ... }`, up to 30 sets per exercise per day).
+  - `muscle-memo-workouts`: Unified 1-set-per-record array (`{ id, date, timestamp, part, exercise, setNum, weight, reps, rir, memo, formScore, interval, oneRM, isPR }`). Legacy horizontal records are automatically migrated to this format, supporting set-by-set free memo and non-destructive duplicate-free cross-device sync.
   - `muscle-memo-user`: User display name.
-  - `muscle-memo-gemini-key`: User's Gemini API key (stored strictly client-side).
+  - `muscle-memo-gemini-key`: User's Gemini API key (stored strictly client-side; excluded from default sync sharing for security).
   - `muscle-memo-gemini-model`: Selected Gemini model ID.
   - `muscle-memo-coach`: Active coach persona ID.
   - `muscle-memo-custom-exercises`: Custom exercises per body part (`胸`, `背中`, `肩`, `脚`, `腕`).

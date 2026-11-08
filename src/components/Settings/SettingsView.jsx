@@ -5,6 +5,7 @@ import {
     LogOut, HelpCircle, Activity, Copy, ShieldAlert, Smartphone, QrCode, Sun 
 } from 'lucide-react';
 import { cn, getLocalDateKey } from '../../lib/utils';
+import { migrateToFlatWorkouts } from '../../lib/workoutMigration';
 import { GeminiService, parseGeminiError, GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from '../../services/gemini';
 import { runSystemDiagnostics } from '../../services/diagnostics';
 
@@ -199,7 +200,17 @@ export default function SettingsView({
                 }
 
                 Object.keys(parsed.data).forEach(k => {
-                    localStorage.setItem(k, parsed.data[k]);
+                    if (k === 'muscle-memo-workouts') {
+                        try {
+                            const raw = typeof parsed.data[k] === 'string' ? JSON.parse(parsed.data[k]) : parsed.data[k];
+                            const migrated = migrateToFlatWorkouts(raw);
+                            localStorage.setItem(k, JSON.stringify(migrated));
+                            return;
+                        } catch {
+                            // fallback
+                        }
+                    }
+                    localStorage.setItem(k, typeof parsed.data[k] === 'string' ? parsed.data[k] : JSON.stringify(parsed.data[k]));
                 });
 
                 alert("設定とデータを復元しました。アプリを再読み込みします。");
@@ -213,41 +224,56 @@ export default function SettingsView({
     };
 
     const handleExportCSV = () => {
-        if (!workouts || workouts.length === 0) {
+        const flatWorkouts = migrateToFlatWorkouts(workouts);
+        if (!flatWorkouts || flatWorkouts.length === 0) {
             if (onShowFeedback) onShowFeedback("出力するデータがありません。");
             else alert("出力するデータがありません。");
             return;
         }
 
-        const headers = ["日付", "種目", "部位"];
-        for (let i = 1; i <= 30; i++) {
-            headers.push(`${i}セット目重量_kg`);
-            headers.push(`${i}セット目回数_Reps`);
-            headers.push(`${i}セット目余力_RIR`);
-            headers.push(`${i}セット目フォーム品質_FormQuality`);
-            headers.push(`${i}セット目インターバル_秒`);
-        }
+        const headers = [
+            "日付",
+            "種目",
+            "部位",
+            "セット番号",
+            "重量_kg",
+            "回数_Reps",
+            "推定1RM_kg",
+            "余力_RIR",
+            "自由メモ",
+            "フォーム品質",
+            "インターバル_秒",
+            "自己ベスト"
+        ];
 
-        const rows = workouts.map(w => {
-            const row = [
+        const escapeCSV = (val) => {
+            if (val === undefined || val === null) return '""';
+            const str = String(val).replace(/"/g, '""');
+            return `"${str}"`;
+        };
+
+        const rows = flatWorkouts.map((w, idx) => {
+            const formLabel = w.formScore === 'perfect' ? 'Perfect' : w.formScore === 'good' ? 'Good' : (w.formScore === 'fail' ? 'Fail' : (w.formScore || ''));
+            return [
                 w.date || getLocalDateKey(w.timestamp),
-                w.exercise,
-                w.part || ""
-            ];
-            for (let i = 1; i <= 30; i++) {
-                row.push(w[`set${i}_weight`] !== undefined && w[`set${i}_weight`] !== null ? w[`set${i}_weight`] : "");
-                row.push(w[`set${i}_reps`] !== undefined && w[`set${i}_reps`] !== null ? w[`set${i}_reps`] : "");
-                row.push(w[`set${i}_rir`] !== undefined && w[`set${i}_rir`] !== null ? w[`set${i}_rir`] : "");
-                row.push(w[`set${i}_form`] || "");
-                row.push(w[`set${i}_interval`] !== undefined && w[`set${i}_interval`] !== null ? w[`set${i}_interval`] : "");
-            }
-            return row;
+                w.exercise || "",
+                w.part || "",
+                w.setNum !== undefined ? w.setNum : (idx + 1),
+                w.weight !== undefined ? w.weight : "",
+                w.reps !== undefined ? w.reps : "",
+                w.oneRM !== undefined ? w.oneRM : "",
+                w.rir !== undefined ? w.rir : 2,
+                w.memo || "",
+                formLabel,
+                w.interval !== undefined ? w.interval : 120,
+                w.isPR ? "★PR" : ""
+            ].map(escapeCSV).join(",");
         });
 
         const csvContent = [
-            headers.map(h => `"${h}"`).join(","),
-            ...rows.map(r => r.map(val => `"${val}"`).join(","))
-        ].join("\n");
+            headers.map(escapeCSV).join(","),
+            ...rows
+        ].join("\r\n");
 
         const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -257,6 +283,7 @@ export default function SettingsView({
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        if (onShowFeedback) onShowFeedback("CSVファイルを書き出しました！");
     };
 
     return (

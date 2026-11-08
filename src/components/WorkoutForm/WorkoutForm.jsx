@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { cn } from '../../lib/utils';
-import { Dumbbell, Layers, Hash, History, CheckCircle2, Sparkles, Activity, AlertTriangle, Timer, Search, Plus, ArrowRight, X, Volume2, VolumeX, ThumbsUp, Target, XCircle } from 'lucide-react';
+import { Dumbbell, Layers, Hash, History, CheckCircle2, Sparkles, Activity, AlertTriangle, Timer, Search, Plus, ArrowRight, X, Volume2, VolumeX, ThumbsUp, Target, XCircle, FileText } from 'lucide-react';
 import { calculateNextTarget, isCompound, DEFAULT_EXERCISES } from '../../lib/trainingEngine';
 import { triggerHaptic, requestNotificationPermission } from '../../lib/audio';
 
@@ -12,7 +12,9 @@ export default function WorkoutForm({
     customExercises = {}, 
     onAddCustomExercise, 
     workoutState = 'setup', 
-    setWorkoutState 
+    setWorkoutState,
+    memo: controlledMemo,
+    onMemoChange
 }) {
     const [activePart, setActivePart] = useState('胸');
     const [exercise, setExercise] = useState(() => {
@@ -22,6 +24,13 @@ export default function WorkoutForm({
     const [weight, setWeight] = useState('');
     const [reps, setReps] = useState('');
     const [rir, setRir] = useState('');
+    const [localMemo, setLocalMemo] = useState('');
+    const memo = controlledMemo !== undefined ? controlledMemo : localMemo;
+    const handleSetMemo = (valOrFn) => {
+        const nextVal = typeof valOrFn === 'function' ? valOrFn(memo) : valOrFn;
+        if (onMemoChange) onMemoChange(nextVal);
+        else setLocalMemo(nextVal);
+    };
     const [interval, setIntervalVal] = useState(() => {
         const presets = DEFAULT_EXERCISES['胸'] || [];
         return presets.length > 0 && isCompound(presets[0].name) ? '180' : '120';
@@ -238,9 +247,10 @@ export default function WorkoutForm({
             reps, 
             formScore, 
             rir, 
+            memo,
             interval: parseInt(interval, 10) || 120 
         });
-    }, [activePart, exercise, weight, reps, formScore, rir, interval, onUpdate]);
+    }, [activePart, exercise, weight, reps, formScore, rir, memo, interval, onUpdate]);
 
     // Helpers to quickly adjust weight, reps, RIR, and interval
     const adjustWeight = (amount) => {
@@ -752,6 +762,51 @@ export default function WorkoutForm({
                 </div>
             </div>
 
+            {/* Free Memo / Set Note Input */}
+            <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                    <label className="text-[10px] sm:text-xs text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                        <FileText size={12} className="text-blue-600 flex-shrink-0" /> セット別 自由メモ (Memo)
+                    </label>
+                    <span className="text-[9px] text-slate-400 font-medium">RIRとセットで保存</span>
+                </div>
+                <div className="relative">
+                    <input
+                        type="text"
+                        value={memo}
+                        onChange={(e) => handleSetMemo(e.target.value)}
+                        placeholder="例: フォーム意識、トップで1秒静止、肘違和感なし..."
+                        className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-800 rounded-xl px-3 py-2.5 pr-8 outline-none focus:bg-white focus:border-blue-500 transition-colors font-medium placeholder:text-slate-400"
+                        maxLength={120}
+                    />
+                    {memo && (
+                        <button
+                            type="button"
+                            onClick={() => handleSetMemo('')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                            title="メモをクリア"
+                        >
+                            <X size={13} />
+                        </button>
+                    )}
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {['フォーム重視', 'ドロップセット', '限界突破', 'ネガティブ意識', '軽め調整'].map((tag) => (
+                        <button
+                            key={tag}
+                            type="button"
+                            onClick={() => {
+                                triggerHaptic('light');
+                                handleSetMemo(prev => prev ? `${prev} / ${tag}` : tag);
+                            }}
+                            className="text-[9px] px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold transition-colors active:scale-95 outline-none"
+                        >
+                            +{tag}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             {/* Form Quality Selector */}
             <div className="glass-card border border-slate-200 space-y-3">
                 <label className="text-xs text-slate-500 font-bold uppercase tracking-wider block flex items-center gap-2">
@@ -799,15 +854,23 @@ export default function WorkoutForm({
                         <CheckCircle2 size={12} />
                         本日の記録 ({todaySessionLogs.length}セット完了)
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
                         {todaySessionLogs.map((log, index) => (
-                            <div key={log.id} className="flex justify-between text-xs text-slate-600 border-b border-slate-100 pb-1 last:border-0">
-                                <span className="opacity-50">セット {index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
-                                <span>
-                                    <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
-                                    <span className="text-slate-400 text-[10px] ml-1.5">(RIR {log.rir !== undefined ? log.rir : '−'})</span>
-                                    {log.isPR && <span className="text-[10px] text-yellow-600 font-bold ml-1.5">★PR</span>}
-                                </span>
+                            <div key={log.id} className="text-xs text-slate-600 border-b border-slate-100 pb-1.5 last:border-0 space-y-1">
+                                <div className="flex justify-between items-center">
+                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
+                                    <span>
+                                        <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
+                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir !== undefined ? log.rir : '−'}</span>
+                                        {log.isPR && <span className="text-[10px] text-yellow-600 font-bold ml-1.5">★PR</span>}
+                                    </span>
+                                </div>
+                                {log.memo && (
+                                    <div className="text-[10px] text-slate-600 bg-white/90 border border-slate-200/80 rounded-md px-2 py-0.5 w-fit flex items-center gap-1 font-medium">
+                                        <span className="text-blue-500 font-bold">💬</span>
+                                        <span>{log.memo}</span>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -821,14 +884,22 @@ export default function WorkoutForm({
                         <History size={12} />
                         前回の記録 ({new Date(previousSessionLogs[0].timestamp).toLocaleDateString("ja-JP")})
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
                         {previousSessionLogs.map((log, index) => (
-                            <div key={log.id} className="flex justify-between text-xs text-slate-600 border-b border-slate-100 pb-1 last:border-0">
-                                <span className="opacity-50">セット {index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
-                                <span>
-                                    <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
-                                    <span className="text-slate-400 text-[10px] ml-1.5">(RIR {log.rir !== undefined ? log.rir : '−'})</span>
-                                </span>
+                            <div key={log.id} className="text-xs text-slate-600 border-b border-slate-100 pb-1.5 last:border-0 space-y-1">
+                                <div className="flex justify-between items-center">
+                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
+                                    <span>
+                                        <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
+                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir !== undefined ? log.rir : '−'}</span>
+                                    </span>
+                                </div>
+                                {log.memo && (
+                                    <div className="text-[10px] text-slate-600 bg-white/90 border border-slate-200/80 rounded-md px-2 py-0.5 w-fit flex items-center gap-1 font-medium">
+                                        <span className="text-blue-500 font-bold">💬</span>
+                                        <span>{log.memo}</span>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>

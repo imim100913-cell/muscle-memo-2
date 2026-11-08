@@ -13,6 +13,7 @@ import MobileSyncModal from './components/Mobile/MobileSyncModal';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useMobileFeatures } from './hooks/useMobileFeatures';
 import { calculate1RM, getLocalDateKey } from './lib/utils';
+import { migrateToFlatWorkouts, isLegacyHorizontalWorkout } from './lib/workoutMigration.js';
 import { GeminiService, parseGeminiError, DEFAULT_GEMINI_MODEL } from './services/gemini';
 import { playBeep, unlockAudio, triggerHaptic, sendTimerNotification } from './lib/audio';
 import { pullSyncSnapshotFromServer, decodeSyncToken, applySyncedData } from './services/mobileSync';
@@ -64,143 +65,34 @@ const LOCAL_COACH_TRIGGERS = {
     }
   }
 };
-// --- Horizontal Workout Data Migration & Mapping Helpers ---
-function migrateWorkoutsToHorizontal(legacyWorkouts) {
-  if (!Array.isArray(legacyWorkouts)) return [];
-  const isHorizontal = legacyWorkouts.some(w => w.set1_weight !== undefined);
-  if (isHorizontal) {
-    return legacyWorkouts;
-  }
-
-  const groups = {};
-  legacyWorkouts.forEach(w => {
-    const date = getLocalDateKey(w.timestamp);
-    const key = `${date}_${w.exercise}`;
-    if (!groups[key]) {
-      groups[key] = [];
-    }
-    groups[key].push(w);
-  });
-
-  const horizontalList = [];
-  Object.keys(groups).forEach(key => {
-    const sets = groups[key].sort((a, b) => a.timestamp - b.timestamp);
-    const firstSet = sets[0];
-    const record = {
-      id: firstSet.id || (Date.now().toString(36) + Math.random().toString(36).substr(2)),
-      date: getLocalDateKey(firstSet.timestamp),
-      timestamp: firstSet.timestamp,
-      part: firstSet.part,
-      exercise: firstSet.exercise
-    };
-
-    sets.forEach((set, index) => {
-      const setNum = index + 1;
-      if (setNum <= 30) {
-        record[`set${setNum}_weight`] = set.weight;
-        record[`set${setNum}_reps`] = set.reps;
-        record[`set${setNum}_rir`] = set.rir !== undefined ? set.rir : 2;
-        record[`set${setNum}_form`] = set.formScore || 'perfect';
-        record[`set${setNum}_interval`] = set.interval !== undefined ? set.interval : 120;
-      }
-    });
-
-    horizontalList.push(record);
-  });
-
-  return horizontalList.sort((a, b) => a.timestamp - b.timestamp);
-}
-
-function flatMapWorkouts(horizontalWorkouts) {
-  if (!Array.isArray(horizontalWorkouts)) return [];
-  
-  const flatSets = [];
-  horizontalWorkouts.forEach(record => {
-    for (let i = 1; i <= 30; i++) {
-      const wKey = `set${i}_weight`;
-      const rKey = `set${i}_reps`;
-      const rirKey = `set${i}_rir`;
-      const fKey = `set${i}_form`;
-      const intKey = `set${i}_interval`;
-      
-      if (record[wKey] !== undefined && record[wKey] !== null && record[wKey] !== '') {
-        const weight = parseFloat(record[wKey]);
-        const reps = parseInt(record[rKey], 10);
-        const rir = record[rirKey] !== undefined && record[rirKey] !== '' ? parseInt(record[rirKey], 10) : 2;
-        const formScore = record[fKey] || 'perfect';
-        const interval = record[intKey] !== undefined && record[intKey] !== '' ? parseInt(record[intKey], 10) : 120;
-        const oneRM = calculate1RM(weight, reps);
-        
-        flatSets.push({
-          id: `${record.id || record.timestamp}-${i}`,
-          timestamp: (record.timestamp || Date.now()) + i * 1000,
-          part: record.part,
-          exercise: record.exercise,
-          weight,
-          reps,
-          rir,
-          formScore,
-          interval,
-          oneRM,
-          isPR: false
-        });
-      }
-    }
-  });
-  
-  flatSets.sort((a, b) => a.timestamp - b.timestamp);
-  
-  const max1RMs = {};
-  flatSets.forEach(set => {
-    const ex = set.exercise;
-    const currentMax = max1RMs[ex] || 0;
-    if (set.oneRM > currentMax) {
-      set.isPR = true;
-      max1RMs[ex] = set.oneRM;
-    } else {
-      set.isPR = false;
-    }
-  });
-  
-  return flatSets;
-}
 
 function App() {
-  // --- Persistent State ---
+  // --- Persistent State (1 Set = 1 Record Unified Format) ---
   const [rawWorkouts, setRawWorkouts] = useLocalStorage('muscle-memo-workouts', []);
 
-  // Migrate legacy data if any
-  const migratedWorkouts = useMemo(() => {
-    return migrateWorkoutsToHorizontal(rawWorkouts);
+  // Standardized flat workouts list (ensures backward compatibility and sorted PR metrics)
+  const workouts = useMemo(() => {
+    return migrateToFlatWorkouts(rawWorkouts);
   }, [rawWorkouts]);
 
-  // Derived flat workouts list for backward compatibility
-  const workouts = useMemo(() => {
-    return flatMapWorkouts(migratedWorkouts);
-  }, [migratedWorkouts]);
-
-  // Custom setter wrapper to automatically migrate on external sets (onboarding / clear)
+  // Custom setter wrapper to automatically normalize on external sets (onboarding / clear)
   const setWorkouts = (newWorkouts) => {
     if (typeof newWorkouts === 'function') {
-      setRawWorkouts(prev => {
-        const resolved = newWorkouts(prev);
-        return migrateWorkoutsToHorizontal(resolved);
-      });
+      setRawWorkouts(prev => migrateToFlatWorkouts(newWorkouts(prev)));
     } else {
-      setRawWorkouts(migrateWorkoutsToHorizontal(newWorkouts));
+      setRawWorkouts(migrateToFlatWorkouts(newWorkouts));
     }
   };
 
-  // Automatically persist migrated horizontal workouts if legacy data was found in storage
+  // Automatically upgrade legacy horizontal workouts to flat records in storage
   useEffect(() => {
     if (rawWorkouts && rawWorkouts.length > 0) {
-      const isHorizontal = rawWorkouts.some(w => w.set1_weight !== undefined);
-      if (!isHorizontal) {
-        console.log("Legacy flat workouts detected in storage. Upgrading to horizontal format permanently...");
-        setRawWorkouts(migratedWorkouts);
+      if (isLegacyHorizontalWorkout(rawWorkouts)) {
+        console.log("Legacy horizontal workouts detected in storage. Upgrading to flat 1-set=1-record format...");
+        setRawWorkouts(migrateToFlatWorkouts(rawWorkouts));
       }
     }
-  }, [rawWorkouts, migratedWorkouts, setRawWorkouts]);
+  }, [rawWorkouts, setRawWorkouts]);
 
   const [userName, setUserName] = useLocalStorage('muscle-memo-user', 'トレーニー');
   const [apiKey, setApiKey] = useLocalStorage('muscle-memo-gemini-key', '');
@@ -217,7 +109,16 @@ function App() {
 
   // --- Local State ---
   const [activeTab, setActiveTab] = useState('home');
-  const [currentEntry, setCurrentEntry] = useState({ part: '胸', exercise: '', weight: '', reps: '', rir: '2', formScore: 'perfect', interval: 120 });
+  const [currentEntry, setCurrentEntry] = useState({ 
+    part: '胸', 
+    exercise: '', 
+    weight: '', 
+    reps: '', 
+    rir: '2', 
+    memo: '', 
+    formScore: 'perfect', 
+    interval: 120 
+  });
   const [feedbackMsg, setFeedbackMsg] = useState(null);
   const [workoutState, setWorkoutState] = useState('setup');
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -405,11 +306,28 @@ function App() {
       currentExercise: exerciseName,
       todaySession: {
         completedSetsCount: todaySets.length,
-        sets: todaySets.map((s, idx) => ({ setNum: idx + 1, weight: s.weight, reps: s.reps, rir: s.rir !== undefined ? s.rir : 2, oneRM: s.oneRM, isPR: s.isPR, formScore: s.formScore }))
+        sets: todaySets.map((s, idx) => ({ 
+          setNum: s.setNum || (idx + 1), 
+          weight: s.weight, 
+          reps: s.reps, 
+          rir: s.rir !== undefined ? s.rir : 2, 
+          memo: s.memo || '',
+          oneRM: s.oneRM, 
+          isPR: s.isPR, 
+          formScore: s.formScore 
+        }))
       },
       previousSession: {
         date: lastSessionDate,
-        sets: lastSessionLogs.map((s, idx) => ({ setNum: idx + 1, weight: s.weight, reps: s.reps, rir: s.rir !== undefined ? s.rir : 2, oneRM: s.oneRM, formScore: s.formScore }))
+        sets: lastSessionLogs.map((s, idx) => ({ 
+          setNum: s.setNum || (idx + 1), 
+          weight: s.weight, 
+          reps: s.reps, 
+          rir: s.rir !== undefined ? s.rir : 2, 
+          memo: s.memo || '',
+          oneRM: s.oneRM, 
+          formScore: s.formScore 
+        }))
       },
       statistics: {
         allTimeMax1RM: max1RM > 0 ? `${max1RM}kg` : "記録なし",
@@ -593,7 +511,7 @@ function App() {
   };
 
   const handleRecord = () => {
-    const { exercise, weight, reps, rir, interval } = currentEntry;
+    const { exercise, weight, reps, rir, memo, interval } = currentEntry;
     if (!exercise) {
       showFeedback("⚠️ 種目を選択してください！");
       return;
@@ -606,55 +524,47 @@ function App() {
     }
 
     const rirVal = rir !== '' && rir !== undefined ? parseInt(rir, 10) : 2;
+    const memoVal = (memo || '').trim();
     const intervalVal = interval !== undefined && interval !== '' ? parseInt(interval, 10) : 120;
     const oneRM = calculate1RM(w, r);
     const timestamp = Date.now();
     const dateKey = getLocalDateKey(timestamp);
 
-    const updatedHorizontal = [...migratedWorkouts];
-    const existingIndex = updatedHorizontal.findIndex(rec => rec.date === dateKey && rec.exercise === exercise);
-
-    let isPRVal = false;
-    if (existingIndex >= 0) {
-      const record = { ...updatedHorizontal[existingIndex] };
-      let slotFound = false;
-      for (let i = 1; i <= 30; i++) {
-        if (record[`set${i}_weight`] === undefined || record[`set${i}_weight`] === null || record[`set${i}_weight`] === '') {
-          record[`set${i}_weight`] = w;
-          record[`set${i}_reps`] = r;
-          record[`set${i}_rir`] = rirVal;
-          record[`set${i}_form`] = currentEntry.formScore || 'perfect';
-          record[`set${i}_interval`] = intervalVal;
-          slotFound = true;
-          break;
-        }
-      }
-      if (!slotFound) {
-        alert("本日のこの種目のセット数が上限（30セット）に達しています。");
-        return;
-      }
-      updatedHorizontal[existingIndex] = record;
-    } else {
-      const newRecord = {
-        id: Date.now().toString(36) + Math.random().toString(36).substr(2),
-        date: dateKey,
-        timestamp,
-        part: currentEntry.part,
-        exercise,
-        set1_weight: w,
-        set1_reps: r,
-        set1_rir: rirVal,
-        set1_form: currentEntry.formScore || 'perfect',
-        set1_interval: intervalVal
-      };
-      updatedHorizontal.push(newRecord);
+    // Count today's sets for this exercise to determine setNum
+    const todaySets = workouts.filter(wItem => wItem.date === dateKey && wItem.exercise === exercise);
+    if (todaySets.length >= 30) {
+      alert("本日のこの種目のセット数が上限（30セット）に達しています。");
+      return;
     }
+    const setNum = todaySets.length + 1;
 
-    const exerciseHistory = workouts.filter(w => w.exercise === exercise);
+    const exerciseHistory = workouts.filter(wItem => wItem.exercise === exercise);
     const currentMax1RM = exerciseHistory.reduce((max, log) => Math.max(max, log.oneRM || 0), 0);
-    isPRVal = oneRM > currentMax1RM;
+    const isPRVal = oneRM > currentMax1RM;
 
-    setRawWorkouts(updatedHorizontal);
+    // Create a new unified flat record (1 Set = 1 Record)
+    const newRecord = {
+      id: `set_${timestamp}_${Math.random().toString(36).substr(2, 7)}`,
+      date: dateKey,
+      timestamp,
+      part: currentEntry.part,
+      exercise,
+      setNum,
+      weight: w,
+      reps: r,
+      rir: rirVal,
+      memo: memoVal,
+      formScore: currentEntry.formScore || 'perfect',
+      interval: intervalVal,
+      oneRM,
+      isPR: isPRVal
+    };
+
+    const updatedWorkouts = migrateToFlatWorkouts([...workouts, newRecord]);
+    setRawWorkouts(updatedWorkouts);
+
+    // Clear free memo for the next set
+    setCurrentEntry(prev => ({ ...prev, memo: '' }));
 
     // Start interval timer automatically on set completion
     if (intervalVal > 0) {
@@ -670,10 +580,12 @@ function App() {
     showFeedback(isPRVal ? "🏆 自己ベスト(PR)更新！インターバル開始" : "記録完了！インターバル開始");
 
     // AI Praise with Rich Context!
-    const updatedFlatWorkouts = flatMapWorkouts(updatedHorizontal);
-    const richContext = buildRichContext(exercise, updatedFlatWorkouts);
+    const richContext = buildRichContext(exercise, updatedWorkouts);
     if (apiKey) {
-      let prompt = `ユーザーが ${exercise} を ${w}kg x ${r}回 (RIR: ${rirVal}) 達成しました。本日のセット数としてはこれで ${updatedFlatWorkouts.filter(w => w.exercise === exercise && new Date(w.timestamp).toDateString() === new Date().toDateString()).length} セット目です。`;
+      let prompt = `ユーザーが ${exercise} を ${w}kg x ${r}回 (RIR: ${rirVal}) 達成しました。本日のセット数としてはこれで ${setNum} セット目です。`;
+      if (memoVal) {
+        prompt += ` ユーザーのセット別メモ: 「${memoVal}」`;
+      }
       if (isPRVal) prompt += " これは自己ベスト(PR)更新です！最大限に褒めちぎってください！";
       else prompt += " 今日のこれまでの進捗や前回の記録と比較して、現状のパフォーマンス分析と次のセットに向けた励ましを述べてください。";
       addAiMessage(prompt, richContext);
@@ -883,6 +795,8 @@ function App() {
               onAddCustomExercise={handleAddCustomExercise}
               workoutState={workoutState}
               setWorkoutState={setWorkoutState}
+              memo={currentEntry.memo}
+              onMemoChange={(val) => setCurrentEntry(prev => ({ ...prev, memo: val }))}
             />
 
 
@@ -907,7 +821,7 @@ function App() {
               coachType={coachType}
               setCoachType={setCoachType}
               onClearData={clearData}
-              workouts={migratedWorkouts}
+              workouts={workouts}
               onShowFeedback={showFeedback}
               onSaveSettings={handleSaveSettings}
               geminiModel={geminiModel}

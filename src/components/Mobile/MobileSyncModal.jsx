@@ -11,7 +11,8 @@ import {
   Upload,
   X,
   Sparkles,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import {
@@ -34,7 +35,7 @@ export default function MobileSyncModal({
 }) {
   const [networkInfo, setNetworkInfo] = useState(null);
   const [selectedIp, setSelectedIp] = useState('');
-  const [includeApiKey, setIncludeApiKey] = useState(true);
+  const [includeApiKey, setIncludeApiKey] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
@@ -349,8 +350,18 @@ export default function MobileSyncModal({
                   onChange={(e) => setIncludeApiKey(e.target.checked)}
                   className="rounded border-slate-300 text-blue-600"
                 />
-                <span>Gemini APIキーも一緒にスマホへ引き継ぐ</span>
+                <span>Gemini APIキーも一緒にスマホへ引き継ぐ (非推奨)</span>
               </label>
+
+              {includeApiKey && (
+                <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl text-[10px] text-amber-900 leading-relaxed font-medium animate-fade-in flex items-start gap-1.5">
+                  <AlertTriangle size={13} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-amber-800 block">セキュリティ注意</span>
+                    ローカル同期データは暗号化されていません。信頼できるプライベートWi-Fiでのみ使用してください。
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
@@ -398,8 +409,18 @@ export default function MobileSyncModal({
                   onChange={(e) => setIncludeApiKey(e.target.checked)}
                   className="rounded border-slate-300 text-blue-600"
                 />
-                <span>Gemini APIキーをリンクに含める</span>
+                <span>Gemini APIキーをリンクに含める (非推奨・平文)</span>
               </label>
+
+              {includeApiKey && (
+                <div className="p-2.5 bg-red-50 border border-red-300 rounded-xl text-[10px] text-red-900 leading-relaxed font-medium animate-fade-in flex items-start gap-1.5">
+                  <AlertTriangle size={14} className="text-red-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-red-800 block">⚠️ 重大なセキュリティ警告</span>
+                    共有URLの中身は圧縮・エンコードされるだけで、暗号化されていません。このURLを第三者に見られた場合、APIキーがそのまま漏洩する危険があります。公共チャット等には投稿せず、APIキーはスマホ側で直接入力することを推奨します。
+                  </div>
+                </div>
+              )}
 
               <button
                 type="button"
