@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'muscle-memo-v2.2.0';
+const CACHE_VERSION = 'muscle-memo-p0-02-24f607c3e5624643';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -11,14 +11,19 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch(() => {
-        // Ignore individual asset pre-cache failures in dev mode
-      });
-    })
-  );
-  self.skipWaiting();
+  event.waitUntil((async () => {
+    const indexURL = new URL('./index.html', self.registration.scope);
+    const response = await fetch(indexURL, { cache: 'reload' });
+    if (!response.ok) throw new Error('App shell could not be cached');
+    const html = await response.clone().text();
+    const bundles = [...html.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css))["']/g)]
+      .map(match => new URL(match[1], indexURL))
+      .filter(url => url.origin === self.location.origin && url.pathname.includes('/assets/'));
+    const cache = await caches.open(CACHE_VERSION);
+    // A new worker must not activate until its executable app shell is available offline.
+    await cache.addAll([...STATIC_ASSETS, ...bundles.map(url => url.href)]);
+    await cache.put(indexURL, response);
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -26,7 +31,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((key) => key !== CACHE_VERSION)
+          .filter((key) => key.startsWith('muscle-memo-') && key !== CACHE_VERSION)
           .map((key) => caches.delete(key))
       )
     )
@@ -101,10 +106,11 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       })
       .catch(() => {
-        return caches.match(request).then((cachedResponse) => {
+        return caches.match(request, { ignoreVary: url.origin === self.location.origin && url.pathname.includes('/assets/') }).then(async (cachedResponse) => {
           if (cachedResponse) return cachedResponse;
           if (request.mode === 'navigate') {
-            return caches.match('./index.html') || caches.match('./');
+            return (await caches.match(new URL('./index.html', self.registration.scope))) ||
+              new Response('Offline', { status: 503, statusText: 'Offline' });
           }
           return new Response('Offline', { status: 503, statusText: 'Offline' });
         });

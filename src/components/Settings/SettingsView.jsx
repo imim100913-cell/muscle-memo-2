@@ -832,18 +832,18 @@ export default function SettingsView({
 
                 <div className="glass p-4 rounded-xl border border-red-200 bg-red-50/50">
                     <p className="text-xs text-slate-600 mb-4 font-semibold">
-                        すべてのデータを完全に削除します。<br />この操作は取り消せません。
+                        端末の記録と設定を初期化します。復旧用の原本は保全します。<br />削除同期は未対応のため、初期化後の同期・復元は停止します。
                     </p>
                     <button
                         onClick={() => {
-                            if (window.confirm("本当に全データを消去しますか？この操作は取り消せません。")) {
-                                onClearData();
-                                if (onShowFeedback) onShowFeedback("データを完全に消去しました。");
+                            if (window.confirm("記録と設定を初期化しますか？復旧用原本は保全します。初期化後は削除情報を確認するまで同期・復元を停止します。")) {
+                                const result = onClearData();
+                                if (result?.success && onShowFeedback) onShowFeedback("記録と設定を初期化しました。");
                             }
                         }}
                         className="w-full py-3 bg-red-50 hover:bg-red-500 text-red-700 hover:text-white border border-red-200 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2"
                     >
-                        <Trash2 size={16} /> 全データを消去
+                        <Trash2 size={16} /> 記録と設定を初期化
                     </button>
                 </div>
             </section>

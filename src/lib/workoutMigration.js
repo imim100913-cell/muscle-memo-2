@@ -5,6 +5,7 @@ function number(value, field, { integer = false, min = 0 } = {}) {
   if (missing(value) || !['string', 'number'].includes(typeof value) || String(value).trim() === '') {
     throw new Error(`${field} が欠損または不正です`);
   }
+  if (typeof value === 'string' && !/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value.trim())) throw new Error(`${field} が不正です`);
   const n = Number(value);
   if (!Number.isFinite(n) || n < min || (integer && !Number.isSafeInteger(n))) throw new Error(`${field} が不正です`);
   return n;
@@ -34,7 +35,7 @@ export function normalizeSingleSet(raw, fallbackIndex = 1) {
   if (raw.isPR !== undefined && typeof raw.isPR !== 'boolean') throw new Error('PR評価が不正です');
   const createdAt = raw.createdAt === undefined ? timestamp : number(raw.createdAt, '作成時刻');
   const updatedAt = raw.updatedAt == null ? null : number(raw.updatedAt, '更新時刻');
-  if (createdAt !== timestamp || (updatedAt !== null && updatedAt < createdAt)) throw new Error('作成・更新時刻が不正です');
+  if (createdAt !== timestamp || (updatedAt !== null && (!Number.isFinite(new Date(updatedAt).getTime()) || updatedAt < createdAt))) throw new Error('作成・更新時刻が不正です');
   return {
     ...Object.fromEntries(Object.entries(raw).filter(([key]) => !/^set\d+_/.test(key))), id, timestamp, date, createdAt, updatedAt,
     // Legacy sessions cannot be reliably reconstructed; keep each source identity separate.
@@ -43,7 +44,7 @@ export function normalizeSingleSet(raw, fallbackIndex = 1) {
     setNum: number(raw.setNum === undefined ? fallbackIndex : raw.setNum, 'セット番号', { integer: true, min: 1 }),
     weight, reps, rir, formScore, memo,
     interval: missing(raw.interval) ? null : number(raw.interval, 'インターバル'),
-    oneRM: raw.oneRM === undefined ? calculate1RM(weight, reps) : number(raw.oneRM, '1RM'),
+    oneRM: number(raw.oneRM === undefined ? calculate1RM(weight, reps) : raw.oneRM, '1RM'),
     isPR: raw.isPR === undefined ? false : raw.isPR
   };
 }

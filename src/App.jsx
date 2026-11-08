@@ -10,7 +10,7 @@ import HistoryView from './components/History/HistoryView';
 import SettingsView from './components/Settings/SettingsView';
 import Onboarding from './components/Onboarding/Onboarding';
 import MobileSyncModal from './components/Mobile/MobileSyncModal';
-import { persistEntries } from './lib/persistence.js';
+import { decodeStoredValue } from './lib/storageSchema.js';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useMobileFeatures } from './hooks/useMobileFeatures';
 import { calculate1RM, getLocalDateKey, createUniqueId } from './lib/utils';
@@ -76,7 +76,6 @@ function App() {
     catch { return { workouts: [], error: '記録データの検証に失敗しました。原本を保護するため記録・移行を停止しています。設定から原本を退避してください。' }; }
   }, [rawWorkouts]);
   const workouts = ledger.workouts;
-  const setWorkouts = next => setRawWorkouts(migrateToFlatWorkouts(next));
   const sessionIdRef = useRef(null);
   const changeWorkoutState = useCallback(next => {
     if (next === 'active') sessionIdRef.current = createUniqueId();
@@ -148,7 +147,9 @@ function App() {
   // Detect incoming QR / Portable URL sync on launch (?sync=lan or #sync=...)
   useEffect(() => {
     let cancelled = false;
+    let sequence = 0;
     const detectIncomingSync = async () => {
+      const request = ++sequence;
       await Promise.resolve();
       const params = new URLSearchParams(window.location.search);
       const hash = window.location.hash || '';
@@ -158,7 +159,7 @@ function App() {
         try {
           const token = hash.split('sync=')[1].split('&')[0];
           const decoded = await decodeSyncToken(token);
-          if (!cancelled && decoded?.d) {
+          if (!cancelled && request === sequence && decoded?.d) {
             setIncomingSyncOffer({
               type: 'url',
               source: '共有URLリンク',
@@ -176,7 +177,7 @@ function App() {
       if (params.get('sync') === 'lan') {
         try {
           const res = await pullSyncSnapshotFromServer();
-          if (!cancelled && res?.snapshot?.data) {
+          if (!cancelled && request === sequence && res?.snapshot?.data) {
             setIncomingSyncOffer({
               type: 'lan',
               source: res.snapshot.sourceDevice || 'PC',
@@ -190,8 +191,10 @@ function App() {
       }
     };
     detectIncomingSync();
+    window.addEventListener('hashchange', detectIncomingSync);
     return () => {
       cancelled = true;
+      window.removeEventListener('hashchange', detectIncomingSync);
     };
   }, []);
 
@@ -606,28 +609,34 @@ function App() {
   };
 
   const clearData = () => {
-    try { persistEntries({ 'muscle-memo-deletion-state': JSON.stringify({ deletedIds: workouts.map(w => w.id), deletedAt: Date.now() }) }); }
-    catch { window.alert('削除情報の保存に失敗したため、初期化を中止しました。'); return; }
-    const result = setWorkouts([]);
-    if (!result.success) { window.alert(result.error); return; }
-    setUserName('トレーニー');
-    setCoachType('all-might');
-    setApiKey('');
-    setGeminiModel(DEFAULT_GEMINI_MODEL);
-    setCustomExercises({
-      "胸": [],
-      "背中": [],
-      "肩": [],
-      "脚": [],
-      "腕": []
+    if (ledger.error) { window.alert(ledger.error); return { success: false }; }
+    let deletedIds;
+    try {
+      const previous = localStorage.getItem('muscle-memo-deletion-state');
+      deletedIds = previous ? decodeStoredValue('muscle-memo-deletion-state', previous).deletedIds : [];
+    } catch { window.alert('削除情報を読み出せないため、初期化を停止しました。'); return { success: false }; }
+    if (!Array.isArray(deletedIds) || !deletedIds.every(id => typeof id === 'string')) {
+      window.alert('削除情報が不正なため、初期化を停止しました。'); return { success: false };
+    }
+    const result = setRawWorkouts([], {
+      'muscle-memo-deletion-state': JSON.stringify({ deletedIds: [...new Set([...deletedIds, ...workouts.map(w => w.id)])], deletedAt: Date.now() }),
+      'muscle-memo-user': JSON.stringify('トレーニー'),
+      'muscle-memo-coach': JSON.stringify('all-might'),
+      'muscle-memo-gemini-key': JSON.stringify(''),
+      'muscle-memo-gemini-model': JSON.stringify(DEFAULT_GEMINI_MODEL),
+      'muscle-memo-custom-exercises': JSON.stringify({ 胸: [], 背中: [], 肩: [], 脚: [], 腕: [] }),
+      'muscle-memo-onboarded': JSON.stringify(false)
     });
-    setRestTimer(0);
-    setIsTimerRunning(false);
-    localStorage.removeItem('muscle-memo-timer-endtime');
-    setWorkoutState('setup');
-    setActiveTab('home');
-    setIsOnboarded(false);
+    if (!result.success) { window.alert(result.error); return result; }
+    // Reload all hooks from one committed snapshot; no second storage transaction.
+    try { localStorage.removeItem('muscle-memo-timer-endtime'); } catch { /* transient timer only */ }
+    window.location.reload();
+    return result;
   };
+
+  if (!isOnboarded && storageError) {
+    return <div role="alert" className="p-6 text-red-800">{storageError} ブラウザの保存設定を確認して再読み込みしてください。</div>;
+  }
 
   if (!isOnboarded) {
     return (

@@ -172,3 +172,78 @@ it('generates independent secure IDs on LAN HTTP without randomUUID', () => {
   expect(first).toMatch(/^[a-f0-9]{32}$/); expect(first).not.toBe(second);
   vi.unstubAllGlobals();
 });
+
+it('round trips actual raw preferences and structured ledger without changing their encodings', () => {
+  const data = {
+    'muscle-memo-sound-mode': 'silent',
+    'muscle-memo-category-priority': 'free_weight',
+    'muscle-memo-wakelock': 'on',
+    'muscle-memo-haptics': 'off',
+    'muscle-memo-custom-order-胸': JSON.stringify(['ベンチプレス']),
+    'muscle-memo-user': JSON.stringify('synthetic tester'),
+    [key]: JSON.stringify([record({ rir: 0, memo: 'synthetic' })])
+  };
+  for (const [k, v] of Object.entries(data)) localStorage.setItem(k, v);
+  const snapshot = collectLocalSyncData();
+  localStorage.clear();
+  applySyncedData(snapshot);
+  const first = collectLocalSyncData();
+  for (const [k, v] of Object.entries(data)) if (k !== key) expect(first[k]).toBe(v);
+  expect(JSON.parse(first[key])).toHaveLength(1);
+  applySyncedData(snapshot); expect(collectLocalSyncData()).toEqual(first);
+  restoreBackup(payload(snapshot)); expect(collectLocalSyncData()).toEqual(first);
+});
+
+it.each([
+  { 'muscle-memo-unknown-future-setting': '"new"' },
+  { 'muscle-memo-sound-mode': 'invalid' },
+  { 'muscle-memo-onboarded': '"true"' },
+  { 'muscle-memo-custom-order-胸': '[1]' },
+  { 'muscle-memo-custom-exercises': '{"__proto__":[]}' }
+])('rejects unsupported keys or invalid setting types before writing any entry', invalid => {
+  localStorage.setItem(key, JSON.stringify([record()]));
+  const original = localStorage.getItem(key);
+  expect(() => applySyncedData({ 'muscle-memo-user': '"changed"', ...invalid })).toThrow();
+  expect(localStorage.getItem('muscle-memo-user')).toBeNull(); expect(localStorage.getItem(key)).toBe(original);
+});
+
+it.each(['0x50', '8e1', '-10', 'Infinity'])('rejects non-decimal measurement strings: %s', weight => {
+  expect(() => normalizeSingleSet(record({ weight }))).toThrow();
+});
+
+it('preserves all measured fields across 1500 legacy sets and repeated JSON migration/sync', () => {
+  const source = Array.from({ length: 50 }, (_, session) => {
+    const row = { id: `synthetic-${session}`, timestamp: 1794096000000 + session * 1000, date: '2026-11-08', exercise: 'ベンチプレス' };
+    for (let n = 1; n <= 30; n++) {
+      row[`set${n}_weight`] = 40 + n * 0.5;
+      row[`set${n}_reps`] = 5 + n % 10;
+      row[`set${n}_rir`] = n % 2 ? null : 0;
+      row[`set${n}_memo`] = `synthetic ${session}:${n}`;
+    }
+    return row;
+  });
+  const original = JSON.stringify(source);
+  const flat = migrateToFlatWorkouts(source);
+  expect(flat).toHaveLength(1500);
+  for (let session = 0; session < source.length; session++) for (let n = 1; n <= 30; n++) {
+    expect(flat[session * 30 + n - 1]).toMatchObject({
+      id: `synthetic-${session}-${n}`, setNum: n, timestamp: source[session].timestamp,
+      weight: source[session][`set${n}_weight`], reps: source[session][`set${n}_reps`],
+      rir: source[session][`set${n}_rir`], memo: source[session][`set${n}_memo`], formScore: null
+    });
+  }
+  expect(migrateToFlatWorkouts(JSON.parse(JSON.stringify(flat)))).toEqual(flat);
+  expect(mergeWorkoutSets(flat, source)).toEqual(flat);
+  expect(JSON.stringify(source)).toBe(original);
+});
+
+it('rejects numeric overflow before serialization can turn derived values into null', () => {
+  const extreme = record({ weight: 1e308, reps: 100 });
+  expect(() => migrateToFlatWorkouts([extreme])).toThrow(/1RM/);
+  expect(() => restoreBackup(payload({ [key]: JSON.stringify([extreme]) }))).toThrow();
+  expect(localStorage.getItem(key)).toBeNull();
+});
+
+it('rejects an invalid updatedAt instead of persisting an unusable date', () => {
+  expect(() => normalizeSingleSet(record({ updatedAt: 1e308 }))).toThrow();
+});

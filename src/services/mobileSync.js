@@ -1,3 +1,4 @@
+import { decodeStoredValue } from '../lib/storageSchema.js';
 import { persistEntries, recoverPending } from '../lib/persistence.js';
 import { mergeWorkoutSets, migrateToFlatWorkouts } from '../lib/workoutMigration.js';
 
@@ -46,7 +47,8 @@ export function applySyncedData(incomingData, mode = 'merge') {
   for (const [key, value] of Object.entries(incomingData)) {
     if (!key.startsWith('muscle-memo-') || key.startsWith('muscle-memo-internal-') || typeof value !== 'string') throw new Error('同期キーまたは値が不正です');
     if (/delet|tombstone/i.test(key)) throw new Error('削除同期は未対応です。同期を中止しました');
-    const parsed = JSON.parse(value);
+    const parsed = decodeStoredValue(key, value);
+    if (key === 'muscle-memo-timer-endtime') continue;
     if (key === 'muscle-memo-workouts') {
       if (parsed.some?.(record => record?.deletedAt || record?.deleted || record?.isDeleted)) throw new Error('削除同期は未対応です');
       const local = localStorage.getItem(key);
@@ -54,7 +56,7 @@ export function applySyncedData(incomingData, mode = 'merge') {
       entries[key] = JSON.stringify(flat);
       mergedSessionsCount = flat.length;
     } else if (key === 'muscle-memo-custom-exercises' && mode === 'merge') {
-      const current = JSON.parse(localStorage.getItem(key) || '{}');
+      const current = decodeStoredValue(key, localStorage.getItem(key) || '{}');
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('種目設定が不正です');
       const merged = { ...current };
       for (const [part, exercises] of Object.entries(parsed)) {

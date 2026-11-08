@@ -168,3 +168,50 @@ it('actual App sends null RIR/form and explicit session identities to AI', async
   expect(context.todaySession.sets[0].formScore).toBeNull();
   expect(context.todaySession.sets[0].sessionId).toBe(context.todaySession.sessionId);
 });
+
+it('actual Settings JSON export restores legitimate raw preferences and ledger together', async () => {
+  const original = [{ id: 'fixture', timestamp: Date.now(), exercise: 'x', weight: 80, reps: 10, rir: 0, formScore: null }];
+  const values = {
+    'muscle-memo-sound-mode': 'silent', 'muscle-memo-category-priority': 'free_weight', 'muscle-memo-wakelock': 'on',
+    [key]: JSON.stringify(original)
+  };
+  for (const [k, v] of Object.entries(values)) localStorage.setItem(k, v);
+  let blob;
+  vi.stubGlobal('URL', { createObjectURL: value => { blob = value; return 'blob:test'; } });
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  render(<SettingsView workouts={original} />);
+  fireEvent.click(screen.getByRole('button', { name: '設定をエクスポート' }));
+  const json = await new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsText(blob); });
+  const { restoreBackup } = await import('../src/services/mobileSync.js');
+  restoreBackup(JSON.parse(json));
+  expect(localStorage.getItem('muscle-memo-internal-original-workouts')).toBe(values[key]);
+  for (const k of Object.keys(values)) if (k !== key) expect(localStorage.getItem(k)).toBe(values[k]);
+  expect(JSON.parse(localStorage.getItem(key))[0]).toMatchObject(original[0]);
+});
+
+it('actual clear action rolls back deletion state, ledger and settings when ledger write fails', () => {
+  localStorage.setItem(key, JSON.stringify([{ id: 'fixture', timestamp: Date.now(), exercise: 'x', weight: 80, reps: 10 }]));
+  localStorage.setItem('muscle-memo-user', '"original name"');
+  localStorage.setItem('muscle-memo-onboarded', 'true');
+  render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: '設定' }));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+  const before = localStorage.getItem(key);
+  const native = Storage.prototype.setItem;
+  let markerWritten = false;
+  let failed = false;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(k, v) {
+    if (k === 'muscle-memo-deletion-state') markerWritten = true;
+    if (k === key && !failed) { failed = true; throw new DOMException('full', 'QuotaExceededError'); }
+    return native.call(this, k, v);
+  });
+  fireEvent.click(screen.getByRole('button', { name: /リセット|初期化|データを削除/ }));
+  expect(markerWritten).toBe(true); expect(failed).toBe(true);
+  expect(localStorage.getItem(key)).toBe(before);
+  expect(localStorage.getItem('muscle-memo-deletion-state')).toBeNull();
+  expect(localStorage.getItem('muscle-memo-user')).toBe('"original name"');
+  expect(localStorage.getItem('muscle-memo-onboarded')).toBe('true');
+  expect(alert).toHaveBeenCalledWith(expect.stringContaining('保存に失敗'));
+  expect(screen.queryByText('記録と設定を初期化しました。')).toBeNull();
+});

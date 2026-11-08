@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import os from 'os';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 function getLocalLanIps() {
   const interfaces = os.networkInterfaces();
@@ -148,6 +150,21 @@ function muscleMemoMobileBridge() {
   };
 }
 
+// Each executable app shell gets its own cache; an installing update must not
+// overwrite the cache still used by an older, active worker.
+function versionedServiceWorker() {
+  return {
+    name: 'versioned-service-worker',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      const worker = readFileSync(new URL('./public/sw.js', import.meta.url), 'utf8');
+      const files = Object.keys(bundle).filter(name => /\.(js|css)$/.test(name)).sort().join('|');
+      const revision = createHash('sha256').update(worker).update(files).digest('hex').slice(0, 16);
+      this.emitFile({ type: 'asset', fileName: 'sw.js', source: worker.replace('muscle-memo-p0-02-v1', `muscle-memo-p0-02-${revision}`) });
+    }
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   base: './',
@@ -155,7 +172,7 @@ export default defineConfig({
     outDir: 'docs',
     emptyOutDir: true
   },
-  plugins: [react(), muscleMemoMobileBridge()],
+  plugins: [react(), muscleMemoMobileBridge(), versionedServiceWorker()],
   server: {
     host: true
   },

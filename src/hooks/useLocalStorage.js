@@ -15,7 +15,7 @@ export function useLocalStorage(key, initialValue) {
     const [error, setError] = useState(initial.error);
     const current = useRef(storedValue);
     const expectedRaw = useRef(initial.raw);
-    const setValue = useCallback(value => {
+    const setValue = useCallback((value, relatedEntries = {}) => {
         if (initial.error) return { success: false, error: initial.error };
         try {
             recoverPending(window.localStorage);
@@ -24,7 +24,7 @@ export function useLocalStorage(key, initialValue) {
                 return { success: false, error: '別の画面でデータが更新されたため、保存を停止しました。入力を退避してください。' };
             }
             const next = typeof value === 'function' ? value(current.current) : value;
-            persistEntries({ [key]: JSON.stringify(next) });
+            persistEntries({ ...relatedEntries, [key]: JSON.stringify(next) });
             expectedRaw.current = JSON.stringify(next);
             current.current = next;
             setStoredValue(next);
