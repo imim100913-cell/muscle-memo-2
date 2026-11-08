@@ -5,6 +5,8 @@ import {
     LogOut, HelpCircle, Activity, Copy, ShieldAlert, Smartphone, QrCode, Sun 
 } from 'lucide-react';
 import { cn, getLocalDateKey } from '../../lib/utils';
+import { recoverPending } from '../../lib/persistence.js';
+import { restoreBackup } from '../../services/mobileSync';
 import { migrateToFlatWorkouts } from '../../lib/workoutMigration';
 import { GeminiService, parseGeminiError, GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from '../../services/gemini';
 import { runSystemDiagnostics } from '../../services/diagnostics';
@@ -87,7 +89,8 @@ export default function SettingsView({
             return;
         }
         if (onSaveSettings) {
-            onSaveSettings(nameInput, keyInput, selectedCoach, selectedModel);
+            const result = onSaveSettings(nameInput, keyInput, selectedCoach, selectedModel);
+            if (result?.success === false) return;
         } else {
             setUserName(nameInput);
             setApiKey(keyInput);
@@ -121,7 +124,7 @@ export default function SettingsView({
                 description: "Gemini API との疎通が正常に確認できました。AIコーチング機能が利用可能です。"
             });
         } catch (error) {
-            console.error("Test connection failed:", error);
+            console.error("Test connection failed");
             const parsed = parseGeminiError(error);
             setTestStatus({
                 success: false,
@@ -142,7 +145,7 @@ export default function SettingsView({
             const res = await runSystemDiagnostics(keyInput);
             setDiagResults(res);
         } catch (e) {
-            console.error("Diagnostics failed:", e);
+            console.error("Diagnostics failed");
             alert("診断の実行中にエラーが発生しました: " + e.message);
         } finally {
             setIsDiagRunning(false);
@@ -157,10 +160,12 @@ export default function SettingsView({
     };
 
     const handleExportBackup = () => {
+        try { recoverPending(localStorage); }
+        catch { alert("復旧が完了していません。原本を保護するためバックアップ出力を停止しています。"); return; }
         const backupData = {};
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && key.startsWith('muscle-memo-')) {
+            if (key && key.startsWith('muscle-memo-') && !key.startsWith('muscle-memo-internal-') && key !== 'muscle-memo-gemini-key') {
                 const val = localStorage.getItem(key);
                 if (val !== null) {
                     backupData[key] = val;
@@ -195,29 +200,13 @@ export default function SettingsView({
         reader.onload = (event) => {
             try {
                 const parsed = JSON.parse(event.target.result);
-                if (!parsed || parsed.application !== "Anti-Gravity Workout Tracker" || !parsed.data) {
-                    throw new Error("正しいアプリのバックアップファイルではありません。");
-                }
+                restoreBackup(parsed);
 
-                Object.keys(parsed.data).forEach(k => {
-                    if (k === 'muscle-memo-workouts') {
-                        try {
-                            const raw = typeof parsed.data[k] === 'string' ? JSON.parse(parsed.data[k]) : parsed.data[k];
-                            const migrated = migrateToFlatWorkouts(raw);
-                            localStorage.setItem(k, JSON.stringify(migrated));
-                            return;
-                        } catch {
-                            // fallback
-                        }
-                    }
-                    localStorage.setItem(k, typeof parsed.data[k] === 'string' ? parsed.data[k] : JSON.stringify(parsed.data[k]));
-                });
-
-                alert("設定とデータを復元しました。アプリを再読み込みします。");
+                alert("設定とデータを非破壊で復元しました。アプリを再読み込みします。");
                 window.location.reload();
             } catch (err) {
-                console.error("Import backup failed:", err);
-                alert("バックアップファイルの復元に失敗しました。正しいJSONファイルを選択してください。(詳細: " + err.message + ")");
+
+                alert("バックアップファイルの復元に失敗しました。正しいJSONファイルを選択してください。(詳細: " + (err instanceof SyntaxError ? "JSON形式が不正です" : err.message) + ")");
             }
         };
         reader.readAsText(file);
@@ -262,7 +251,7 @@ export default function SettingsView({
                 w.weight !== undefined ? w.weight : "",
                 w.reps !== undefined ? w.reps : "",
                 w.oneRM !== undefined ? w.oneRM : "",
-                w.rir !== undefined ? w.rir : 2,
+                w.rir ?? null,
                 w.memo || "",
                 formLabel,
                 w.interval !== undefined ? w.interval : 120,
@@ -577,7 +566,7 @@ export default function SettingsView({
                     <Cloud size={16} className="text-blue-600" /> 設定のバックアップと復元
                 </h3>
                 <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
-                    設定データやワークアウト履歴をJSONファイルとしてローカルに書き出し、または書き出したファイルから設定を復元することができます。端末の機種変更や別ブラウザへのデータ移行時にご利用ください。
+                    設定データやワークアウト履歴をJSONファイルとしてローカルに書き出し、または書き出したファイルから設定を復元することができます。記録は追加方式で復元し、同一IDの競合は停止します。端末の機種変更や別ブラウザへのデータ移行時にご利用ください。
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                     <button

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import { Dumbbell, CheckCircle2, Smartphone, Sun, RefreshCw, Download } from 'lucide-react';
 
@@ -10,10 +10,11 @@ import HistoryView from './components/History/HistoryView';
 import SettingsView from './components/Settings/SettingsView';
 import Onboarding from './components/Onboarding/Onboarding';
 import MobileSyncModal from './components/Mobile/MobileSyncModal';
+import { persistEntries } from './lib/persistence.js';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useMobileFeatures } from './hooks/useMobileFeatures';
-import { calculate1RM, getLocalDateKey } from './lib/utils';
-import { migrateToFlatWorkouts, isLegacyHorizontalWorkout } from './lib/workoutMigration.js';
+import { calculate1RM, getLocalDateKey, createUniqueId } from './lib/utils';
+import { migrateToFlatWorkouts, normalizeSingleSet } from './lib/workoutMigration.js';
 import { GeminiService, parseGeminiError, DEFAULT_GEMINI_MODEL } from './services/gemini';
 import { playBeep, unlockAudio, triggerHaptic, sendTimerNotification } from './lib/audio';
 import { pullSyncSnapshotFromServer, decodeSyncToken, applySyncedData } from './services/mobileSync';
@@ -68,31 +69,19 @@ const LOCAL_COACH_TRIGGERS = {
 
 function App() {
   // --- Persistent State (1 Set = 1 Record Unified Format) ---
-  const [rawWorkouts, setRawWorkouts] = useLocalStorage('muscle-memo-workouts', []);
+  const [rawWorkouts, setRawWorkouts, storageError] = useLocalStorage('muscle-memo-workouts', []);
 
-  // Standardized flat workouts list (ensures backward compatibility and sorted PR metrics)
-  const workouts = useMemo(() => {
-    return migrateToFlatWorkouts(rawWorkouts);
+  const ledger = useMemo(() => {
+    try { return { workouts: migrateToFlatWorkouts(rawWorkouts), error: null }; }
+    catch { return { workouts: [], error: '記録データの検証に失敗しました。原本を保護するため記録・移行を停止しています。設定から原本を退避してください。' }; }
   }, [rawWorkouts]);
-
-  // Custom setter wrapper to automatically normalize on external sets (onboarding / clear)
-  const setWorkouts = (newWorkouts) => {
-    if (typeof newWorkouts === 'function') {
-      setRawWorkouts(prev => migrateToFlatWorkouts(newWorkouts(prev)));
-    } else {
-      setRawWorkouts(migrateToFlatWorkouts(newWorkouts));
-    }
-  };
-
-  // Automatically upgrade legacy horizontal workouts to flat records in storage
-  useEffect(() => {
-    if (rawWorkouts && rawWorkouts.length > 0) {
-      if (isLegacyHorizontalWorkout(rawWorkouts)) {
-        console.log("Legacy horizontal workouts detected in storage. Upgrading to flat 1-set=1-record format...");
-        setRawWorkouts(migrateToFlatWorkouts(rawWorkouts));
-      }
-    }
-  }, [rawWorkouts, setRawWorkouts]);
+  const workouts = ledger.workouts;
+  const setWorkouts = next => setRawWorkouts(migrateToFlatWorkouts(next));
+  const sessionIdRef = useRef(null);
+  const changeWorkoutState = useCallback(next => {
+    if (next === 'active') sessionIdRef.current = createUniqueId();
+    setWorkoutState(next);
+  }, []);
 
   const [userName, setUserName] = useLocalStorage('muscle-memo-user', 'トレーニー');
   const [apiKey, setApiKey] = useLocalStorage('muscle-memo-gemini-key', '');
@@ -114,9 +103,9 @@ function App() {
     exercise: '', 
     weight: '', 
     reps: '', 
-    rir: '2', 
+    rir: '',
     memo: '', 
-    formScore: 'perfect', 
+    formScore: null,
     interval: 120 
   });
   const [feedbackMsg, setFeedbackMsg] = useState(null);
@@ -208,17 +197,20 @@ function App() {
 
   const handleAcceptIncomingSync = () => {
     if (!incomingSyncOffer?.data) return;
-    triggerHaptic('success');
-    applySyncedData(incomingSyncOffer.data, 'merge');
-    setIncomingSyncOffer(null);
-    window.location.reload();
+    try {
+      applySyncedData(incomingSyncOffer.data, 'merge');
+      triggerHaptic('success');
+      setIncomingSyncOffer(null);
+      window.location.reload();
+    } catch (error) { window.alert(error.message); }
   };
 
   const handleSaveSettings = (newName, newApiKey, newCoach, newModel) => {
-    setUserName(newName);
-    setApiKey(newApiKey);
-    setCoachType(newCoach);
-    if (newModel) setGeminiModel(newModel);
+    const results = [setUserName(newName), setApiKey(newApiKey), setCoachType(newCoach)];
+    if (newModel) results.push(setGeminiModel(newModel));
+    const failure = results.find(result => !result.success);
+    if (failure) window.alert(failure.error);
+    return failure || { success: true };
   };
 
   const handleAddCustomExercise = (part, name, category) => {
@@ -283,10 +275,10 @@ function App() {
       .sort((a, b) => a.timestamp - b.timestamp);
       
     // Today's sets in this session
-    const todaySets = exerciseHistory.filter(w => new Date(w.timestamp).toDateString() === todayStr);
+    const todaySets = exerciseHistory.filter(w => new Date(w.timestamp).toDateString() === todayStr && w.sessionId === sessionIdRef.current);
     
     // Past sessions (excluding today)
-    const pastSets = exerciseHistory.filter(w => new Date(w.timestamp).toDateString() !== todayStr);
+    const pastSets = exerciseHistory.filter(w => w.sessionId !== sessionIdRef.current);
     
     // Find last session date & logs
     let lastSessionDate = "なし";
@@ -294,8 +286,8 @@ function App() {
     if (pastSets.length > 0) {
       const lastTimestamp = pastSets[pastSets.length - 1].timestamp;
       lastSessionDate = new Date(lastTimestamp).toLocaleDateString("ja-JP");
-      const lastSessionDayStr = new Date(lastTimestamp).toDateString();
-      lastSessionLogs = pastSets.filter(w => new Date(w.timestamp).toDateString() === lastSessionDayStr);
+      const previousSessionId = pastSets[pastSets.length - 1].sessionId;
+      lastSessionLogs = pastSets.filter(w => w.sessionId === previousSessionId);
     }
 
     // Max 1RM achieved
@@ -305,12 +297,14 @@ function App() {
       userProfile: { name: userName, coachType },
       currentExercise: exerciseName,
       todaySession: {
+        sessionId: sessionIdRef.current,
         completedSetsCount: todaySets.length,
         sets: todaySets.map((s, idx) => ({ 
+          id: s.id, sessionId: s.sessionId,
           setNum: s.setNum || (idx + 1), 
           weight: s.weight, 
           reps: s.reps, 
-          rir: s.rir !== undefined ? s.rir : 2, 
+          rir: s.rir ?? null,
           memo: s.memo || '',
           oneRM: s.oneRM, 
           isPR: s.isPR, 
@@ -320,10 +314,11 @@ function App() {
       previousSession: {
         date: lastSessionDate,
         sets: lastSessionLogs.map((s, idx) => ({ 
+          id: s.id, sessionId: s.sessionId,
           setNum: s.setNum || (idx + 1), 
           weight: s.weight, 
           reps: s.reps, 
-          rir: s.rir !== undefined ? s.rir : 2, 
+          rir: s.rir ?? null,
           memo: s.memo || '',
           oneRM: s.oneRM, 
           formScore: s.formScore 
@@ -428,7 +423,7 @@ function App() {
         setMessages(prev => [...prev, aiMsg]);
         if (!isChatOpenRef.current) setHasUnread(true);
       } catch (e) {
-        console.error(e);
+        console.error('AI request failed');
         const parsedError = parseGeminiError(e);
         
         let coachIntro = "";
@@ -488,9 +483,9 @@ function App() {
   };
 
   // --- App Logic ---
-  const handleFormUpdate = (data) => {
-    setCurrentEntry(data);
-  };
+  const handleFormUpdate = useCallback((data) => {
+    setCurrentEntry(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data);
+  }, []);
 
   // Trigger from WorkoutForm (Advice / Exercise changed)
   const handleAiTrigger = (trigger) => {
@@ -511,29 +506,30 @@ function App() {
   };
 
   const handleRecord = () => {
+    if (ledger.error) { showFeedback(ledger.error); return; }
     const { exercise, weight, reps, rir, memo, interval } = currentEntry;
     if (!exercise) {
       showFeedback("⚠️ 種目を選択してください！");
       return;
     }
-    const w = parseFloat(weight);
-    const r = parseFloat(reps);
-    if (!weight || !reps || isNaN(w) || isNaN(r) || w <= 0 || r <= 0) {
+    const w = Number(weight);
+    const r = Number(reps);
+    if (!weight || !reps || !Number.isFinite(w) || !Number.isSafeInteger(r) || w <= 0 || r <= 0) {
       showFeedback("⚠️ 重量と回数を入力してください！");
       return;
     }
 
-    const rirVal = rir !== '' && rir !== undefined ? parseInt(rir, 10) : 2;
-    const memoVal = (memo || '').trim();
+    const rirVal = rir !== '' && rir != null ? Number(rir) : null;
+    const memoVal = typeof memo === 'string' ? memo.trim() : '';
     const intervalVal = interval !== undefined && interval !== '' ? parseInt(interval, 10) : 120;
     const oneRM = calculate1RM(w, r);
     const timestamp = Date.now();
     const dateKey = getLocalDateKey(timestamp);
 
-    // Count today's sets for this exercise to determine setNum
-    const todaySets = workouts.filter(wItem => wItem.date === dateKey && wItem.exercise === exercise);
+    // Number sets independently within this session and exercise
+    const todaySets = workouts.filter(wItem => wItem.sessionId === sessionIdRef.current && wItem.exercise === exercise);
     if (todaySets.length >= 30) {
-      alert("本日のこの種目のセット数が上限（30セット）に達しています。");
+      alert("このセッションのこの種目のセット数が上限（30セット）に達しています。");
       return;
     }
     const setNum = todaySets.length + 1;
@@ -544,7 +540,10 @@ function App() {
 
     // Create a new unified flat record (1 Set = 1 Record)
     const newRecord = {
-      id: `set_${timestamp}_${Math.random().toString(36).substr(2, 7)}`,
+      id: createUniqueId(),
+      sessionId: sessionIdRef.current || (sessionIdRef.current = createUniqueId()),
+      createdAt: timestamp,
+      updatedAt: timestamp,
       date: dateKey,
       timestamp,
       part: currentEntry.part,
@@ -554,14 +553,17 @@ function App() {
       reps: r,
       rir: rirVal,
       memo: memoVal,
-      formScore: currentEntry.formScore || 'perfect',
+      formScore: currentEntry.formScore ?? null,
       interval: intervalVal,
       oneRM,
       isPR: isPRVal
     };
 
-    const updatedWorkouts = migrateToFlatWorkouts([...workouts, newRecord]);
-    setRawWorkouts(updatedWorkouts);
+    let updatedWorkouts;
+    try { updatedWorkouts = [...workouts, normalizeSingleSet(newRecord)]; }
+    catch { showFeedback('入力値が不正です。記録していません。'); return; }
+    const result = setRawWorkouts(updatedWorkouts);
+    if (!result.success) { showFeedback(result.error); return; }
 
     // Clear free memo for the next set
     setCurrentEntry(prev => ({ ...prev, memo: '' }));
@@ -571,7 +573,7 @@ function App() {
       unlockAudio();
       setRestTimer(intervalVal);
       setIsTimerRunning(true);
-      localStorage.setItem('muscle-memo-timer-endtime', String(Date.now() + intervalVal * 1000));
+      try { localStorage.setItem('muscle-memo-timer-endtime', String(Date.now() + intervalVal * 1000)); } catch { /* Ledger already saved; timer is transient. */ }
     }
 
     // UI & Haptic Feedback
@@ -582,7 +584,7 @@ function App() {
     // AI Praise with Rich Context!
     const richContext = buildRichContext(exercise, updatedWorkouts);
     if (apiKey) {
-      let prompt = `ユーザーが ${exercise} を ${w}kg x ${r}回 (RIR: ${rirVal}) 達成しました。本日のセット数としてはこれで ${setNum} セット目です。`;
+      let prompt = `ユーザーが ${exercise} を ${w}kg x ${r}回 (RIR: ${rirVal ?? '未入力'}) 達成しました。本日のセット数としてはこれで ${setNum} セット目です。`;
       if (memoVal) {
         prompt += ` ユーザーのセット別メモ: 「${memoVal}」`;
       }
@@ -604,7 +606,10 @@ function App() {
   };
 
   const clearData = () => {
-    setWorkouts([]);
+    try { persistEntries({ 'muscle-memo-deletion-state': JSON.stringify({ deletedIds: workouts.map(w => w.id), deletedAt: Date.now() }) }); }
+    catch { window.alert('削除情報の保存に失敗したため、初期化を中止しました。'); return; }
+    const result = setWorkouts([]);
+    if (!result.success) { window.alert(result.error); return; }
     setUserName('トレーニー');
     setCoachType('all-might');
     setApiKey('');
@@ -656,11 +661,16 @@ function App() {
         )}
         <Onboarding
           onComplete={(data) => {
-            setUserName(data.userName);
-            setApiKey(data.apiKey);
-            setCoachType(data.coachType);
-            setWorkouts(data.workouts || []);
-            setIsOnboarded(true);
+            const results = [setUserName(data.userName), setApiKey(data.apiKey), setCoachType(data.coachType)];
+            if (data.exercisePreferences?.length) {
+              const next = { ...customExercises };
+              for (const ex of data.exercisePreferences) next[ex.part] = [...(next[ex.part] || []), ex];
+              results.push(setCustomExercises(next));
+            }
+            const failure = results.find(result => !result.success);
+            if (failure) { window.alert(failure.error); return; }
+            const result = setIsOnboarded(true);
+            if (!result.success) window.alert(result.error);
           }}
         />
       </>
@@ -670,6 +680,14 @@ function App() {
   return (
     <Layout>
       <main className="flex-1 w-full text-slate-800">
+        {(ledger.error || storageError) && <div role="alert" className="p-4 bg-red-50 text-red-800">
+          {ledger.error || storageError}
+          <button type="button" onClick={() => {
+            const blob = new Blob([JSON.stringify({ entry: currentEntry, original: localStorage.getItem('muscle-memo-workouts') }, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a'); link.href = url; link.download = 'muscle-memo-recovery.json'; link.click(); URL.revokeObjectURL(url);
+          }}>未保存入力と原本を退避</button>
+        </div>}
         {/* Instant New Version Available Banner (PWA Auto-Update) */}
         {updateAvailable && (
           <div className="mx-4 mt-3 p-3 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl text-white text-xs font-bold flex items-center justify-between shadow-md animate-fade-in">
@@ -794,9 +812,12 @@ function App() {
               customExercises={customExercises}
               onAddCustomExercise={handleAddCustomExercise}
               workoutState={workoutState}
-              setWorkoutState={setWorkoutState}
+              setWorkoutState={changeWorkoutState}
               memo={currentEntry.memo}
-              onMemoChange={(val) => setCurrentEntry(prev => ({ ...prev, memo: val }))}
+              onMemoChange={(val) => setCurrentEntry(prev => {
+                const next = typeof val === 'function' ? val(prev.memo) : val;
+                return typeof next === 'string' ? { ...prev, memo: next } : prev;
+              })}
             />
 
 

@@ -101,7 +101,7 @@ export default function HistoryView({ workouts }) {
                                             <span className="font-bold text-indigo-600">{set.reps} <span className="text-[9px] font-normal text-slate-400">reps</span></span>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            <span className="text-[10px] text-slate-600 font-mono bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">RIR {set.rir !== undefined ? set.rir : 2}</span>
+                                            <span className="text-[10px] text-slate-600 font-mono bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">RIR {set.rir ?? '未入力'}</span>
                                             {set.interval !== undefined && (
                                                 <span className="text-[10px] text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">{set.interval}秒</span>
                                             )}

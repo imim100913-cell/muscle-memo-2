@@ -138,44 +138,12 @@ export default function Onboarding({
     };
 
     const handleFinish = () => {
-        // Construct seed workouts logs from questionnaire
-        const seededWorkouts = [];
-        const now = Date.now();
-
-        QUESTIONNAIRE.forEach((q, idx) => {
-            const answer = historyAnswers[q.exercise];
-            if (answer && answer.active) {
-                // Generate a mock log 2-3 days in the past to simulate history
-                let weight = q.defaultWeight;
-                let reps = 10;
-                let daysAgo = 3;
-
-                if (answer.time === 'longAgo') {
-                    weight = Math.round(q.defaultWeight * 0.8 * 2) / 2; // drop weight for safety
-                    reps = 8;
-                    daysAgo = 10;
-                }
-
-                seededWorkouts.push({
-                    id: `seed-log-${idx}-${now}`,
-                    timestamp: now - daysAgo * 24 * 60 * 60 * 1000,
-                    part: q.part,
-                    exercise: q.exercise,
-                    weight,
-                    reps,
-                    rir: 2,
-                    oneRM: Math.round(weight * (1 + reps / 30)),
-                    formScore: 'perfect',
-                    isPR: true
-                });
-            }
-        });
-
         onComplete({
             userName: name.trim() || 'トレーニー',
             apiKey: apiKey.trim(),
             coachType: selectedCoach,
-            workouts: seededWorkouts
+            workouts: [],
+            exercisePreferences: QUESTIONNAIRE.filter(q => historyAnswers[q.exercise]?.active).map(q => ({ part: q.part, name: q.exercise }))
         });
     };
 

@@ -158,14 +158,17 @@ export function calculateNextTarget(exercise, history = []) {
 
   // Find the most recent log
   const lastLog = exerciseHistory[0];
-  const lastRir = lastLog.rir !== undefined ? lastLog.rir : 2; // Default to 2 if missing
+  const lastRir = lastLog.rir ?? null; // Unknown measurements remain unknown
 
   // RIR Autoregulation & Progressive Overload calculations
   let targetWeight = lastLog.weight;
   let targetReps = compound ? "8〜10" : "10〜12";
   let reason = "";
 
-  if (lastLog.formScore === 'fail') {
+  if (lastRir === null || lastLog.formScore == null) {
+    targetReps = `${lastLog.reps}回`;
+    reason = '前回はRIRまたはフォームが未評価です。同重量から状態を確認してください。';
+  } else if (lastLog.formScore === 'fail') {
     // Drop weight by 5% due to form failure
     const rawWeight = lastLog.weight * 0.95;
     targetWeight = Math.round(rawWeight * 2) / 2;

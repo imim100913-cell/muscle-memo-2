@@ -1,199 +1,174 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { normalizeSingleSet, migrateToFlatWorkouts, mergeWorkoutSets } from '../src/lib/workoutMigration.js';
-import { collectLocalSyncData, applySyncedData } from '../src/services/mobileSync.js';
+import { collectLocalSyncData, applySyncedData, restoreBackup } from '../src/services/mobileSync.js';
+import { createUniqueId } from '../src/lib/utils.js';
+import { persistEntries, recoverPending, JOURNAL_KEY, ORIGINAL_KEY } from '../src/lib/persistence.js';
 
-describe('P0-01: 記録データの正確性と保全に関する監査テスト', () => {
+const key = 'muscle-memo-workouts';
+const record = (extra = {}) => ({ id: 'a', date: '2026-11-08', timestamp: 1794096000000, exercise: 'ベンチプレス', part: '胸', setNum: 1, weight: 80, reps: 10, ...extra });
+const payload = data => ({ application: 'Anti-Gravity Workout Tracker', version: '2.0', data });
+beforeEach(() => localStorage.clear());
+afterEach(() => vi.restoreAllMocks());
 
-  // =========================================================================
-  // 1. RIR の未入力と RIR 0 の区別
-  // =========================================================================
-  describe('問題①-A: RIR (Reps in Reserve) の欠損値扱い', () => {
-    it('RIR=0 (限界まで挙上) は 0 として正確に保存されるべき', () => {
-      const recordRirZero = {
-        exercise: 'ベンチプレス',
-        weight: 80,
-        reps: 10,
-        rir: 0
-      };
-      const normalized = normalizeSingleSet(recordRirZero);
-      expect(normalized.rir).toBe(0);
-    });
-
-    it('RIR 未入力 (空文字列/undefined/null) の場合、実測していない「2」に捏造されず null または未入力として保持されるべき', () => {
-      const recordRirEmpty = {
-        exercise: 'ベンチプレス',
-        weight: 80,
-        reps: 10,
-        rir: '' // ユーザーが空欄のまま記録
-      };
-      const normalized = normalizeSingleSet(recordRirEmpty);
-
-      // 【監査対象】未入力なのに 2 に勝手に補完されて実測データ汚染が起きていないかを検証
-      // 現行コードが 2 に補完している場合、このアサーションによって問題を検知・再現できる
-      expect(normalized.rir, '未入力のRIRが勝手に「2」に補完されてはならない').not.toBe(2);
-      expect([null, undefined, '']).toContain(normalized.rir);
-    });
+describe('production migration', () => {
+  it.each(['', null, undefined])('missing RIR/form %s becomes null', value => {
+    const set = normalizeSingleSet(record({ rir: value, formScore: value }));
+    expect(set.rir).toBeNull(); expect(set.formScore).toBeNull();
   });
-
-  // =========================================================================
-  // 2. フォーム未評価が perfect に変換されないことの検証
-  // =========================================================================
-  describe('問題①-B: フォーム品質評価の欠損値扱い', () => {
-    it('フォーム未評価 (null/undefined/空文字) の場合、勝手に「perfect」に捏造されてはならない', () => {
-      const recordFormUnrated = {
-        exercise: 'ベンチプレス',
-        weight: 80,
-        reps: 10,
-        formScore: null // ユーザーがフォーム品質ボタンを未選択
-      };
-      const normalized = normalizeSingleSet(recordFormUnrated);
-
-      // 【監査対象】未選択なのに勝手に 'perfect' として保存されていないかを検証
-      expect(normalized.formScore, '未評価のフォームが勝手に perfect に補完されてはならない').not.toBe('perfect');
-      expect([null, undefined, '', 'unrated']).toContain(normalized.formScore);
-    });
+  it('retains measured zero and previously supplied values without guessing provenance', () => {
+    expect(normalizeSingleSet(record({ rir: 0 })).rir).toBe(0);
+    const set = normalizeSingleSet(record({ rir: 2, formScore: 'perfect' }));
+    expect(set.rir).toBe(2); expect(set.formScore).toBe('perfect');
   });
-
-  // =========================================================================
-  // 3. 初期設定 (Onboarding) での架空履歴混入の検知
-  // =========================================================================
-  describe('問題②: Onboarding による架空過去履歴の混入リスク', () => {
-    it('アンケート回答から生成される seedWorkouts は実測データと区別がつかず混入する構造になっている', () => {
-      const now = Date.now();
-      // Onboarding.jsx 159〜170行目のロジックを再現
-      const mockSeededWorkout = {
-        id: `seed-log-0-${now}`,
-        timestamp: now - 3 * 24 * 60 * 60 * 1000,
-        part: '胸',
-        exercise: 'ベンチプレス',
-        weight: 50,
-        reps: 10,
-        rir: 2,
-        oneRM: Math.round(50 * (1 + 10 / 30)),
-        formScore: 'perfect',
-        isPR: true
-      };
-
-      // 【監査対象】実測フラグやサンプルフラグが存在せず、通常のトレーニング記録と全く同一形式で保存されてしまう問題を検知
-      const hasSampleFlag = Boolean(mockSeededWorkout.isSample || mockSeededWorkout.isSeed || mockSeededWorkout.isSimulated);
-      expect(hasSampleFlag, 'Onboardingの架空データには実測値と明確に区別するフラグ(isSample等)が必要').toBe(true);
-    });
+  it.each([{ weight: '80kg' }, { weight: -1 }, { weight: null }, { reps: '10x' }, { reps: 1.5 }, { reps: 0 }, { date: '2026-02-30' }, { date: '' }, { id: '' }, { id: 123 }, { timestamp: null }, { timestamp: Infinity }, { rir: 'x' }, { formScore: 'unknown' }, { memo: () => '' }])('rejects corrupt values %j', extra => {
+    expect(() => migrateToFlatWorkouts([record(extra)])).toThrow();
   });
-
-  // =========================================================================
-  // 4. 同日・同種目の複数セット同期における上書き・消失リスク
-  // =========================================================================
-  describe('問題③: 同期処理における同日・同種目セットの衝突と保全', () => {
-    it('端末Aで3セット、端末Bで別の3セットを記録した場合、同期によってどちらか一方が破棄されず6セット全て保全されるべき', () => {
-      const baseDate = '2026-11-08';
-      const deviceA_Sets = [
-        { id: 'devA-1', date: baseDate, timestamp: 1700000001000, exercise: 'スクワット', setNum: 1, weight: 100, reps: 5 },
-        { id: 'devA-2', date: baseDate, timestamp: 1700000002000, exercise: 'スクワット', setNum: 2, weight: 100, reps: 5 },
-        { id: 'devA-3', date: baseDate, timestamp: 1700000003000, exercise: 'スクワット', setNum: 3, weight: 100, reps: 5 }
-      ];
-
-      const deviceB_Sets = [
-        { id: 'devB-4', date: baseDate, timestamp: 1700000004000, exercise: 'スクワット', setNum: 4, weight: 100, reps: 4 },
-        { id: 'devB-5', date: baseDate, timestamp: 1700000005000, exercise: 'スクワット', setNum: 5, weight: 95, reps: 6 },
-        { id: 'devB-6', date: baseDate, timestamp: 1700000006000, exercise: 'スクワット', setNum: 6, weight: 90, reps: 8 }
-      ];
-
-      // 新しい mergeWorkoutSets による統合
-      const merged = mergeWorkoutSets(deviceA_Sets, deviceB_Sets);
-
-      // 【監査対象】端末Aの3セットと端末Bの3セットが全て保持され、合計6セットになること
-      expect(merged.length).toBe(6);
-      expect(merged.map(s => s.id)).toEqual(
-        expect.arrayContaining(['devA-1', 'devA-2', 'devA-3', 'devB-4', 'devB-5', 'devB-6'])
-      );
-    });
-
-    it('旧来の横長統合ロジック（セット数や更新時刻で丸ごと破棄する旧方式）の問題再現', () => {
-      // 旧 mobileSync.js 60〜90行の判定：
-      // countSets(inc) > countSets(existing) || (incSets === extSets && inc.timestamp > existing.timestamp)
-      // 端末A（3セット）と端末B（別内容の3セット）の場合、timestampが新しい端末Bだけで上書きされ、端末Aのセットが全滅する
-      const existingRecord = {
-        date: '2026-11-08',
-        exercise: 'スクワット',
-        timestamp: 1000,
-        set1_weight: 100, set1_reps: 5,
-        set2_weight: 100, set2_reps: 5,
-        set3_weight: 100, set3_reps: 5
-      };
-
-      const incomingRecord = {
-        date: '2026-11-08',
-        exercise: 'スクワット',
-        timestamp: 2000,
-        set1_weight: 100, set1_reps: 4,
-        set2_weight: 95, set2_reps: 6,
-        set3_weight: 90, set3_reps: 8
-      };
-
-      // 旧ロジックをシミュレーション
-      const oldMerge = (ext, inc) => {
-        if (inc.timestamp > ext.timestamp) {
-          return inc; // 端末Aのセットが全て消える！
-        }
-        return ext;
-      };
-
-      const result = oldMerge(existingRecord, incomingRecord);
-      // 旧ロジックでは existingRecord のデータが完全に消失することを再現
-      expect(result.set1_reps).toBe(4); // incomingのデータのみ残り、existingは失われる
-    });
+  it('migrates sparse horizontal sets without inventing timestamps/numbers and is idempotent', () => {
+    const old = [{ id: 'old', timestamp: 1794096000000, date: '2026-11-08', exercise: 'スクワット', set1_weight: 100, set1_reps: 5, set1_rir: 0, set1_memo: 'first', set3_weight: 90, set3_reps: 8 }];
+    const original = JSON.stringify(old);
+    const flat = migrateToFlatWorkouts(old);
+    expect(flat).toHaveLength(2);
+    expect(flat.map(s => [s.id, s.setNum, s.weight, s.reps, s.rir, s.memo, s.formScore])).toEqual([
+      ['old-1', 1, 100, 5, 0, 'first', null], ['old-3', 3, 90, 8, null, '', null]
+    ]);
+    expect(flat[0].timestamp).toBe(old[0].timestamp);
+    expect(migrateToFlatWorkouts(flat)).toEqual(flat);
+    expect(JSON.stringify(old)).toBe(original);
   });
-
-  // =========================================================================
-  // 5. 保存失敗（localStorage QuotaExceededError等）の検知と伝播
-  // =========================================================================
-  describe('問題⑤: localStorage 保存失敗の検知とUIフィードバック', () => {
-    let mockStorage = {};
-    
-    beforeEach(() => {
-      mockStorage = {};
-      global.localStorage = {
-        getItem: vi.fn((k) => mockStorage[k] || null),
-        setItem: vi.fn((k, v) => {
-          mockStorage[k] = String(v);
-        }),
-        removeItem: vi.fn((k) => {
-          delete mockStorage[k];
-        }),
-        clear: vi.fn(() => {
-          mockStorage = {};
-        })
-      };
-    });
-
-    it('localStorage.setItem がクォータ上限等で例外を投げた際、単に無視されずエラーが検知可能であること', () => {
-      // QuotaExceededError を模倣
-      global.localStorage.setItem.mockImplementation(() => {
-        const error = new Error('QuotaExceededError');
-        error.name = 'QuotaExceededError';
-        throw error;
-      });
-
-      // 保存関数をテスト
-      const safeSaveWorkoutLedger = (workouts) => {
-        try {
-          global.localStorage.setItem('muscle-memo-workouts', JSON.stringify(workouts));
-          return { success: true };
-        } catch (e) {
-          return { 
-            success: false, 
-            error: e, 
-            userMessage: '端末の保存容量が一杯か、ブラウザの制限により保存に失敗しました。' 
-          };
-        }
-      };
-
-      const res = safeSaveWorkoutLedger([{ exercise: 'ベンチプレス', weight: 100, reps: 5 }]);
-      
-      // 【監査対象】保存失敗が正常に false としてキャッチされ、ユーザー向けメッセージが返ることを確認
-      expect(res.success).toBe(false);
-      expect(res.error.name).toBe('QuotaExceededError');
-      expect(res.userMessage).toContain('保存に失敗しました');
-    });
+  it('fails whole migration for partial or corrupt horizontal sets and duplicate IDs', () => {
+    expect(() => migrateToFlatWorkouts([record(), { id: 'old', timestamp: 1, exercise: 'x', set1_weight: 80 }])).toThrow();
+    expect(() => migrateToFlatWorkouts([record(), record()])).toThrow();
+    expect(() => migrateToFlatWorkouts({})).toThrow();
   });
+});
+
+describe('production sync and restore', () => {
+  it('keeps six independent sets starting from setNum 1 on both devices; repeat sync is stable', () => {
+    const a = [1, 2, 3].map(n => record({ id: `a${n}`, sessionId: 'a', setNum: n }));
+    const b = [1, 2, 3].map(n => record({ id: `b${n}`, sessionId: 'b', setNum: n, reps: 8 }));
+    const merged = mergeWorkoutSets(a, b);
+    expect(merged).toHaveLength(6);
+    expect(mergeWorkoutSets(merged, b)).toEqual(merged);
+    expect(mergeWorkoutSets(merged, a)).toEqual(merged);
+  });
+  it('rejects competing same-ID values regardless of wall-clock ordering; no writes', () => {
+    const local = JSON.stringify([record({ memo: 'local' })]); localStorage.setItem(key, local);
+    expect(() => applySyncedData({ [key]: JSON.stringify([record({ memo: 'remote', updatedAt: 1894096000000 })]) })).toThrow(/競合/);
+    expect(localStorage.getItem(key)).toBe(local);
+  });
+  it('validates all entries before writing, never falls back to corrupt data', () => {
+    localStorage.setItem(key, JSON.stringify([record()]));
+    for (const value of ['broken', '{}', JSON.stringify([record({ weight: 'bad' })])]) {
+      expect(() => applySyncedData({ 'muscle-memo-user': '"new"', [key]: value })).toThrow();
+      expect(localStorage.getItem('muscle-memo-user')).toBeNull();
+      expect(JSON.parse(localStorage.getItem(key))).toEqual([record()]);
+    }
+  });
+  it('refuses deletion sync metadata', () => {
+    expect(() => applySyncedData({ 'muscle-memo-tombstones': '[]' })).toThrow();
+    expect(() => applySyncedData({ [key]: JSON.stringify([record({ deletedAt: 1 })]) })).toThrow();
+  });
+  it('prevalidates backup and preserves original before successful restoration', () => {
+    const old = JSON.stringify([record()]); localStorage.setItem(key, old);
+    expect(() => restoreBackup(payload({ 'muscle-memo-user': '"new"', [key]: 'broken' }))).toThrow();
+    expect(localStorage.getItem(key)).toBe(old);
+    expect(localStorage.getItem('muscle-memo-user')).toBeNull();
+    const data = payload({ [key]: JSON.stringify([record({ id: 'b' })]) });
+    restoreBackup(data);
+    expect(localStorage.getItem(ORIGINAL_KEY)).toBe(old);
+    const restored = localStorage.getItem(key); restoreBackup(data);
+    expect(localStorage.getItem(key)).toBe(restored);
+  });
+  it('rolls back partial restore after quota failure; no success is returned', () => {
+    localStorage.setItem(key, JSON.stringify([record()]));
+    localStorage.setItem('muscle-memo-user', '"old"');
+    const original = localStorage.getItem(key);
+    const native = Storage.prototype.setItem;
+    let failed = false;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(k, v) {
+      if (k === key && !failed) { failed = true; throw new DOMException('full', 'QuotaExceededError'); }
+      return native.call(this, k, v);
+    });
+    expect(() => restoreBackup(payload({ 'muscle-memo-user': '"new"', [key]: JSON.stringify([record({ id: 'b' })]) }))).toThrow();
+    expect(localStorage.getItem(key)).toBe(original);
+    expect(localStorage.getItem('muscle-memo-user')).toBe('"old"');
+    expect(localStorage.getItem(JOURNAL_KEY)).toBeNull();
+  });
+  it('keeps recovery journal when rollback fails, then recovers on next attempt', () => {
+    localStorage.setItem('muscle-memo-user', '"old"');
+    const native = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(k, v) {
+      if (k === 'muscle-memo-user') throw new DOMException('denied', 'SecurityError');
+      return native.call(this, k, v);
+    });
+    expect(() => persistEntries({ 'muscle-memo-user': '"new"' })).toThrow();
+    expect(localStorage.getItem(JOURNAL_KEY)).not.toBeNull();
+    vi.restoreAllMocks(); recoverPending(localStorage);
+    expect(localStorage.getItem('muscle-memo-user')).toBe('"old"');
+    expect(localStorage.getItem(JOURNAL_KEY)).toBeNull();
+  });
+  it('excludes secrets and internal snapshots from default sharing', () => {
+    localStorage.setItem('muscle-memo-gemini-key', '"TEST_ONLY"');
+    localStorage.setItem(ORIGINAL_KEY, '[]'); localStorage.setItem(JOURNAL_KEY, '{}');
+    localStorage.setItem(key, '[]');
+    expect(collectLocalSyncData()).toEqual({ [key]: '[]' });
+  });
+});
+
+it('sync via production storage path remains byte-stable and preserves every measured field', () => {
+  const measured = [record({ id: 'a', rir: 0, formScore: 'good', memo: 'a' }), record({ id: 'b', setNum: 1, weight: 75, reps: 12, memo: 'b' })];
+  localStorage.setItem(key, JSON.stringify([measured[0]]));
+  const incoming = { [key]: JSON.stringify([measured[1]]) };
+  applySyncedData(incoming); const first = localStorage.getItem(key);
+  applySyncedData(incoming); expect(localStorage.getItem(key)).toBe(first);
+  expect(JSON.parse(first).map(s => [s.id, s.weight, s.reps, s.memo, s.rir, s.formScore])).toEqual([
+    ['a', 80, 10, 'a', 0, 'good'], ['b', 75, 12, 'b', null, null]
+  ]);
+});
+it('backup restoration adds records and never replaces a competing same-ID record', () => {
+  localStorage.setItem(key, JSON.stringify([record()]));
+  restoreBackup(payload({ [key]: JSON.stringify([record({ id: 'b' })]) }));
+  expect(JSON.parse(localStorage.getItem(key))).toHaveLength(2);
+  const original = localStorage.getItem(key);
+  expect(() => restoreBackup(payload({ [key]: JSON.stringify([record({ weight: 90 })]) }))).toThrow(/競合/);
+  expect(localStorage.getItem(key)).toBe(original);
+});
+it('local deletion marker stops sync before resurrecting deleted records', () => {
+  localStorage.setItem(key, '[]'); localStorage.setItem('muscle-memo-deletion-state', '{}');
+  expect(() => applySyncedData({ [key]: JSON.stringify([record()]) })).toThrow(/削除/);
+  expect(localStorage.getItem(key)).toBe('[]');
+});
+it('corrupt migration never changes its stored original or settings', () => {
+  const old = [{ id: 'old', timestamp: 1, exercise: 'x', set1_weight: 80, set1_reps: 10, set2_weight: 'broken', set2_reps: 5 }];
+  const bytes = JSON.stringify(old); localStorage.setItem(key, bytes);
+  expect(() => applySyncedData({ 'muscle-memo-user': '"new"', [key]: '[]' })).toThrow();
+  expect(localStorage.getItem(key)).toBe(bytes); expect(localStorage.getItem('muscle-memo-user')).toBeNull();
+});
+it('malformed recovery journal blocks writes without touching originals', () => {
+  localStorage.setItem(key, '[]'); localStorage.setItem(JOURNAL_KEY, JSON.stringify({ unrelated: 'bad' }));
+  expect(() => persistEntries({ [key]: '[1]' })).toThrow(/破損/);
+  expect(localStorage.getItem(key)).toBe('[]'); expect(localStorage.getItem('unrelated')).toBeNull();
+});
+it('silent storage write failure is detected by read-back verification', () => {
+  const native = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(k, v) { if (k !== key) native.call(this, k, v); });
+  expect(() => persistEntries({ [key]: '[]' })).toThrow(/照合/);
+  expect(localStorage.getItem(key)).toBeNull();
+});
+it('does not report success when the transaction journal cannot be removed', () => {
+  const native = Storage.prototype.removeItem;
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function(k) { if (k !== JOURNAL_KEY) native.call(this, k); });
+  expect(() => persistEntries({ [key]: '[]' })).toThrow(/削除照合/);
+  expect(localStorage.getItem(JOURNAL_KEY)).not.toBeNull();
+  vi.restoreAllMocks(); recoverPending(localStorage);
+  expect(localStorage.getItem(key)).toBeNull();
+});
+
+it('generates independent secure IDs on LAN HTTP without randomUUID', () => {
+  const fill = crypto.getRandomValues.bind(crypto);
+  vi.stubGlobal('crypto', { getRandomValues: fill });
+  const first = createUniqueId(); const second = createUniqueId();
+  expect(first).toMatch(/^[a-f0-9]{32}$/); expect(first).not.toBe(second);
+  vi.unstubAllGlobals();
 });

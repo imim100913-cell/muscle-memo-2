@@ -1,42 +1,40 @@
-import { useState, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
+import { persistEntries, recoverPending } from '../lib/persistence.js';
 
 export function useLocalStorage(key, initialValue) {
-    // Get from local storage then parse stored json or return initialValue
-    const readValue = () => {
-        if (typeof window === 'undefined') {
-            return initialValue;
-        }
-
+    const [initial] = useState(() => {
         try {
-            const item = window.localStorage.getItem(key);
-            return item ? JSON.parse(item) : initialValue;
-        } catch (error) {
-            console.warn(`Error reading localStorage key "${key}":`, error);
-            return initialValue;
+            recoverPending(window.localStorage);
+            const raw = window.localStorage.getItem(key);
+            return { value: raw === null ? initialValue : JSON.parse(raw), error: null, raw };
+        } catch {
+            return { value: initialValue, error: '保存データを読み出せません。原本を保護するため更新を停止しています。' };
         }
-    };
-
-    const [storedValue, setStoredValue] = useState(readValue);
-
-    const setValue = (value) => {
+    });
+    const [storedValue, setStoredValue] = useState(initial.value);
+    const [error, setError] = useState(initial.error);
+    const current = useRef(storedValue);
+    const expectedRaw = useRef(initial.raw);
+    const setValue = useCallback(value => {
+        if (initial.error) return { success: false, error: initial.error };
         try {
-            // Allow value to be a function so we have same API as useState
-            const valueToStore = value instanceof Function ? value(storedValue) : value;
-
-            setStoredValue(valueToStore);
-
-            if (typeof window !== 'undefined') {
-                window.localStorage.setItem(key, JSON.stringify(valueToStore));
+            recoverPending(window.localStorage);
+            if (window.localStorage.getItem(key) !== expectedRaw.current) {
+                setError('別の画面で保存データが更新されています。上書きを停止しました。入力を退避して再読み込みしてください。');
+                return { success: false, error: '別の画面でデータが更新されたため、保存を停止しました。入力を退避してください。' };
             }
-        } catch (error) {
-            console.warn(`Error setting localStorage key "${key}":`, error);
+            const next = typeof value === 'function' ? value(current.current) : value;
+            persistEntries({ [key]: JSON.stringify(next) });
+            expectedRaw.current = JSON.stringify(next);
+            current.current = next;
+            setStoredValue(next);
+            setError(null);
+            return { success: true };
+        } catch (cause) {
+            const message = `保存に失敗しました（${cause.name || 'Error'}）。入力を保持しています。再試行または未保存データを退避してください。`;
+            setError(message);
+            return { success: false, error: message };
         }
-    };
-
-    useEffect(() => {
-        setStoredValue(readValue());
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    return [storedValue, setValue];
+    }, [key, initial.error]);
+    return [storedValue, setValue, error];
 }

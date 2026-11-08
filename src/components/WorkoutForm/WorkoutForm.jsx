@@ -25,9 +25,13 @@ export default function WorkoutForm({
     const [reps, setReps] = useState('');
     const [rir, setRir] = useState('');
     const [localMemo, setLocalMemo] = useState('');
-    const memo = controlledMemo !== undefined ? controlledMemo : localMemo;
+    const memo = typeof controlledMemo === 'string' ? controlledMemo : localMemo;
+    const memoRef = useRef(memo);
+    useEffect(() => { memoRef.current = memo; }, [memo]);
     const handleSetMemo = (valOrFn) => {
-        const nextVal = typeof valOrFn === 'function' ? valOrFn(memo) : valOrFn;
+        const nextVal = typeof valOrFn === 'function' ? valOrFn(memoRef.current) : valOrFn;
+        if (typeof nextVal !== 'string') return;
+        memoRef.current = nextVal;
         if (onMemoChange) onMemoChange(nextVal);
         else setLocalMemo(nextVal);
     };
@@ -35,7 +39,7 @@ export default function WorkoutForm({
         const presets = DEFAULT_EXERCISES['胸'] || [];
         return presets.length > 0 && isCompound(presets[0].name) ? '180' : '120';
     });
-    const [formScore, setFormScore] = useState('perfect');
+    const [formScore, setFormScore] = useState(null);
 
     // UI Search & Custom inputs
     const [searchQuery, setSearchQuery] = useState('');
@@ -230,9 +234,6 @@ export default function WorkoutForm({
                 setReps(String(lastSet.reps));
             }
         }
-        if (rir === '' && aiTarget?.targetRir !== undefined) {
-            setRir(String(aiTarget.targetRir));
-        }
         if (aiTarget?.interval) {
             setIntervalVal(String(aiTarget.interval));
         }
@@ -271,7 +272,7 @@ export default function WorkoutForm({
 
     const adjustRir = (amount) => {
         triggerHaptic('light');
-        const base = lastSet && lastSet.rir !== undefined ? parseInt(lastSet.rir) : 2;
+        const base = lastSet && lastSet.rir != null ? parseInt(lastSet.rir) : 2;
         const current = rir !== '' ? parseInt(rir) : base;
         const next = Math.max(0, Math.min(5, current + amount));
         setRir(next.toString());
@@ -718,7 +719,7 @@ export default function WorkoutForm({
                         type="number"
                         value={rir}
                         onChange={(e) => setRir(e.target.value)}
-                        placeholder={lastSet && lastSet.rir !== undefined ? lastSet.rir.toString() : "2"}
+                        placeholder={lastSet && lastSet.rir != null ? lastSet.rir.toString() : "2"}
                         className="w-full bg-transparent text-xl sm:text-2xl font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
                         min="0"
                         max="5"
@@ -821,7 +822,7 @@ export default function WorkoutForm({
                         <button
                             key={item.value}
                             type="button"
-                            onClick={() => setFormScore(item.value)}
+                            onClick={() => setFormScore(formScore === item.value ? null : item.value)}
                             className={cn(
                                 "flex flex-col items-center justify-center p-2.5 rounded-xl border text-center transition-all active:scale-95 outline-none",
                                 formScore === item.value
@@ -858,10 +859,10 @@ export default function WorkoutForm({
                         {todaySessionLogs.map((log, index) => (
                             <div key={log.id} className="text-xs text-slate-600 border-b border-slate-100 pb-1.5 last:border-0 space-y-1">
                                 <div className="flex justify-between items-center">
-                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
+                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : log.formScore === 'fail' ? 'Fail' : '未評価'})</span>
                                     <span>
                                         <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
-                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir !== undefined ? log.rir : '−'}</span>
+                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir != null ? log.rir : '−'}</span>
                                         {log.isPR && <span className="text-[10px] text-yellow-600 font-bold ml-1.5">★PR</span>}
                                     </span>
                                 </div>
@@ -888,10 +889,10 @@ export default function WorkoutForm({
                         {previousSessionLogs.map((log, index) => (
                             <div key={log.id} className="text-xs text-slate-600 border-b border-slate-100 pb-1.5 last:border-0 space-y-1">
                                 <div className="flex justify-between items-center">
-                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
+                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : log.formScore === 'fail' ? 'Fail' : '未評価'})</span>
                                     <span>
                                         <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
-                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir !== undefined ? log.rir : '−'}</span>
+                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir != null ? log.rir : '−'}</span>
                                     </span>
                                 </div>
                                 {log.memo && (
