@@ -10,6 +10,7 @@ import HistoryView from './components/History/HistoryView';
 import SettingsView from './components/Settings/SettingsView';
 import Onboarding from './components/Onboarding/Onboarding';
 import MobileSyncModal from './components/Mobile/MobileSyncModal';
+import { RESET_BACKUP_KEY } from './lib/persistence.js';
 import { decodeStoredValue } from './lib/storageSchema.js';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useMobileFeatures } from './hooks/useMobileFeatures';
@@ -611,7 +612,9 @@ function App() {
   const clearData = () => {
     if (ledger.error) { window.alert(ledger.error); return { success: false }; }
     let deletedIds;
+    let beforeReset;
     try {
+      beforeReset = localStorage.getItem('muscle-memo-workouts') ?? '[]';
       const previous = localStorage.getItem('muscle-memo-deletion-state');
       deletedIds = previous ? decodeStoredValue('muscle-memo-deletion-state', previous).deletedIds : [];
     } catch { window.alert('削除情報を読み出せないため、初期化を停止しました。'); return { success: false }; }
@@ -619,6 +622,7 @@ function App() {
       window.alert('削除情報が不正なため、初期化を停止しました。'); return { success: false };
     }
     const result = setRawWorkouts([], {
+      [RESET_BACKUP_KEY]: beforeReset,
       'muscle-memo-deletion-state': JSON.stringify({ deletedIds: [...new Set([...deletedIds, ...workouts.map(w => w.id)])], deletedAt: Date.now() }),
       'muscle-memo-user': JSON.stringify('トレーニー'),
       'muscle-memo-coach': JSON.stringify('all-might'),

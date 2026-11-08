@@ -1,6 +1,7 @@
 // Originals and a recovery journal must be durable before any ledger replacement.
 export const JOURNAL_KEY = 'muscle-memo-internal-pending';
 export const ORIGINAL_KEY = 'muscle-memo-internal-original-workouts';
+export const RESET_BACKUP_KEY = 'muscle-memo-internal-before-reset-workouts';
 export function writeVerified(storage, key, value) {
   storage.setItem(key, value);
   if (storage.getItem(key) !== value) throw new Error('永続保存の照合に失敗しました');
@@ -13,7 +14,7 @@ export function recoverPending(storage) {
   const pending = storage.getItem(JOURNAL_KEY);
   if (!pending) return;
   const original = JSON.parse(pending);
-  if (!original || typeof original !== 'object' || Array.isArray(original) || Object.entries(original).some(([key, value]) => !key.startsWith('muscle-memo-') || key.startsWith('muscle-memo-internal-') || (value !== null && typeof value !== 'string'))) {
+  if (!original || typeof original !== 'object' || Array.isArray(original) || Object.entries(original).some(([key, value]) => !key.startsWith('muscle-memo-') || (key.startsWith('muscle-memo-internal-') && key !== RESET_BACKUP_KEY) || (value !== null && typeof value !== 'string'))) {
     throw new Error('復旧用ジャーナルが破損しています。原本を保護して保存を停止しました');
   }
   for (const [key, value] of Object.entries(original)) {

@@ -247,3 +247,30 @@ it('rejects numeric overflow before serialization can turn derived values into n
 it('rejects an invalid updatedAt instead of persisting an unusable date', () => {
   expect(() => normalizeSingleSet(record({ updatedAt: 1e308 }))).toThrow();
 });
+
+it('reset preimage is transactional and the original migration snapshot remains immutable', async () => {
+  const { RESET_BACKUP_KEY } = await import('../src/lib/persistence.js');
+  const old = JSON.stringify([record()]);
+  const latest = JSON.stringify([record(), record({ id: 'added-later' })]);
+  localStorage.setItem(ORIGINAL_KEY, old); localStorage.setItem(key, latest);
+  persistEntries({ [RESET_BACKUP_KEY]: latest, 'muscle-memo-deletion-state': JSON.stringify({ deletedIds: ['a', 'added-later'], deletedAt: Date.now() }), [key]: '[]' });
+  expect(localStorage.getItem(RESET_BACKUP_KEY)).toBe(latest);
+  expect(localStorage.getItem(ORIGINAL_KEY)).toBe(old);
+  expect(localStorage.getItem(key)).toBe('[]');
+});
+
+it('failed reset restores the previous reset preimage as well as the live ledger', async () => {
+  const { RESET_BACKUP_KEY } = await import('../src/lib/persistence.js');
+  localStorage.setItem(key, JSON.stringify([record()]));
+  localStorage.setItem(RESET_BACKUP_KEY, '["older synthetic archive"]');
+  const before = localStorage.getItem(key);
+  const native = Storage.prototype.setItem; let failed = false;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(k, v) {
+    if (k === key && !failed) { failed = true; throw new DOMException('full', 'QuotaExceededError'); }
+    return native.call(this, k, v);
+  });
+  expect(() => persistEntries({ [RESET_BACKUP_KEY]: before, 'muscle-memo-deletion-state': '{}', [key]: '[]' })).toThrow();
+  expect(localStorage.getItem(key)).toBe(before);
+  expect(localStorage.getItem(RESET_BACKUP_KEY)).toBe('["older synthetic archive"]');
+  expect(localStorage.getItem('muscle-memo-deletion-state')).toBeNull();
+});

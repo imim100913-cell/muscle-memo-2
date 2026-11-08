@@ -195,15 +195,15 @@ test('first service worker activation never reloads or discards an unsaved memo'
 });
 
 test('successful reset commits deletion IDs and empty ledger together and preserves the original', async ({ page }) => {
-  const original = JSON.stringify([makeSet('a-1')]);
-  await seed(page, { [WORKOUTS]: original, 'muscle-memo-onboarded': 'true' }); await page.goto('/');
+  const original = JSON.stringify([makeSet('a-1'), makeSet('a-2', 2)]);
+  await seed(page, { [WORKOUTS]: original, 'muscle-memo-internal-original-workouts': JSON.stringify([makeSet('a-1')]), 'muscle-memo-onboarded': 'true' }); await page.goto('/');
   await page.getByRole('button', { name: '設定', exact: true }).click();
   page.on('dialog', dialog => dialog.accept());
   await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: '記録と設定を初期化', exact: true }).click()]);
   await expect(page.getByRole('button', { name: /スキップしてデフォルトで開始/ })).toBeVisible();
   expect(await ledger(page)).toEqual([]);
-  const stored = await page.evaluate(() => ({ marker: JSON.parse(localStorage.getItem('muscle-memo-deletion-state')), original: localStorage.getItem('muscle-memo-internal-original-workouts'), pending: localStorage.getItem('muscle-memo-internal-pending') }));
-  expect(stored.marker.deletedIds).toEqual(['a-1']); expect(stored.original).toBe(original); expect(stored.pending).toBeNull();
+  const stored = await page.evaluate(() => ({ marker: JSON.parse(localStorage.getItem('muscle-memo-deletion-state')), original: localStorage.getItem('muscle-memo-internal-original-workouts'), beforeReset: localStorage.getItem('muscle-memo-internal-before-reset-workouts'), pending: localStorage.getItem('muscle-memo-internal-pending') }));
+  expect(stored.marker.deletedIds).toEqual(['a-1', 'a-2']); expect(stored.original).toBe(JSON.stringify([makeSet('a-1')])); expect(stored.beforeReset).toBe(original); expect(stored.pending).toBeNull();
 });
 
 test.describe('local calendar date', () => {
