@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'muscle-memo-p0-02-b18ff60a9d70b288';
+const CACHE_VERSION = 'muscle-memo-p0-02-d0fba8c70cc1f424';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -27,16 +27,13 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key.startsWith('muscle-memo-') && key !== CACHE_VERSION)
-          .map((key) => caches.delete(key))
-      )
-    )
-  );
-  self.clients.claim();
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys
+      .filter(key => key.startsWith('muscle-memo-') && key !== CACHE_VERSION)
+      .map(key => caches.delete(key)));
+    await self.clients.claim();
+  })());
 });
 
 // Listen for messages from client (e.g. SKIP_WAITING or SHOW_NOTIFICATION)
@@ -78,42 +75,34 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-// Network-first strategy with cache fallback for always-fresh updates + offline resilience
+// The active worker owns an immutable, fully installed executable shell. Only a
+// successfully installed and explicitly activated worker may select a new shell.
+// Network-first HTML caching would mix a new index with unavailable new bundles.
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  // Skip Vite HMR, internal API endpoints, and external Gemini API calls
+  // Other origins, APIs and dev tools are outside the executable shell cache.
   if (
+    url.origin !== self.location.origin ||
     url.pathname.includes('/api/') ||
     url.pathname.includes('@vite') ||
-    url.pathname.includes('node_modules') ||
-    url.hostname.includes('googleapis.com')
+    url.pathname.includes('node_modules')
   ) {
     return;
   }
 
-  event.respondWith(
-    fetch(request)
-      .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200 && url.origin === self.location.origin) {
-          const cloned = networkResponse.clone();
-          caches.open(CACHE_VERSION).then((cache) => {
-            cache.put(request, cloned);
-          });
-        }
-        return networkResponse;
-      })
-      .catch(() => {
-        return caches.match(request, { ignoreVary: url.origin === self.location.origin && url.pathname.includes('/assets/') }).then(async (cachedResponse) => {
-          if (cachedResponse) return cachedResponse;
-          if (request.mode === 'navigate') {
-            return (await caches.match(new URL('./index.html', self.registration.scope))) ||
-              new Response('Offline', { status: 503, statusText: 'Offline' });
-          }
-          return new Response('Offline', { status: 503, statusText: 'Offline' });
-        });
-      })
-  );
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_VERSION);
+    const target = request.mode === 'navigate'
+      ? new URL('./index.html', self.registration.scope)
+      : request;
+    const cached = await cache.match(target, { ignoreVary: true });
+    if (cached) return cached;
+    // Never overwrite this version with an unverified network response, and
+    // never borrow an executable from another version's (possibly partial) cache.
+    try { return await fetch(request); }
+    catch { return new Response('Offline', { status: 503, statusText: 'Offline' }); }
+  })());
 });

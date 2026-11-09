@@ -281,3 +281,23 @@ it('actual clear action rejects an externally changed ledger before creating del
   expect(localStorage.getItem('muscle-memo-internal-before-reset-workouts')).toBeNull();
   expect(localStorage.getItem('muscle-memo-internal-pending')).toBeNull();
 });
+
+it('actual App keeps the full unsaved measurement draft across settings and history tabs', () => {
+  startApp();
+  fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '82.5' } });
+  fireEvent.change(screen.getAllByRole('spinbutton')[1], { target: { value: '7' } });
+  fireEvent.change(screen.getAllByRole('spinbutton')[2], { target: { value: '0' } });
+  fireEvent.change(screen.getAllByRole('spinbutton')[3], { target: { value: '95' } });
+  fireEvent.click(screen.getByRole('button', { name: /Good\s*通常フォーム/ }));
+  fireEvent.change(screen.getByPlaceholderText(/フォーム意識、トップ/), { target: { value: 'unsaved actual measurement' } });
+  const beforeInputs = screen.getAllByRole('spinbutton').map(input => input.value);
+  fireEvent.click(screen.getByRole('button', { name: '設定', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: '記録・分析', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'ホーム', exact: true }));
+  expect(screen.getAllByRole('spinbutton').map(input => input.value)).toEqual(beforeInputs);
+  expect(beforeInputs.slice(0, 3)).toEqual(['82.5', '7', '0']);
+  expect(screen.getByPlaceholderText(/フォーム意識、トップ/).value).toBe('unsaved actual measurement');
+  recordClick();
+  expect(JSON.parse(localStorage.getItem(key))).toHaveLength(1);
+  expect(JSON.parse(localStorage.getItem(key))[0]).toMatchObject({ weight: 82.5, reps: 7, rir: 0, formScore: 'good', interval: 95, memo: 'unsaved actual measurement' });
+});

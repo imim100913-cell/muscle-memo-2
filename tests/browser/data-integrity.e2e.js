@@ -58,6 +58,27 @@ test('new onboarding, memo tags, missing values and RIR zero persist through rel
   expect(errors).toEqual([]);
 });
 
+for (const rir of ['', '0']) {
+test(`tab navigation retains a non-default exercise and the full unsaved draft (RIR ${rir || 'missing'})`, async ({ page }) => {
+  await seed(page, { 'muscle-memo-onboarded': 'true' }); await page.goto('/');
+  await page.getByRole('button', { name: '脚', exact: true }).click();
+  await page.getByRole('button', { name: /バーベル・スクワット\s*フリーウェイト/ }).click();
+  await page.getByRole('button', { name: /トレーニングセッションを開始する/ }).click();
+  await page.getByRole('spinbutton').nth(0).fill('82.5'); await page.getByRole('spinbutton').nth(1).fill('7');
+  await page.getByRole('spinbutton').nth(2).fill(rir); await page.getByRole('spinbutton').nth(3).fill('95');
+  await page.getByRole('button', { name: /Good\s*通常フォーム/ }).click();
+  await memoInput(page).fill('synthetic unsaved squat');
+  await page.getByRole('button', { name: '設定', exact: true }).click();
+  await page.getByRole('button', { name: '記録・分析', exact: true }).click();
+  await page.getByRole('button', { name: 'ホーム', exact: true }).click();
+  for (const [index, value] of ['82.5', '7', rir, '95'].entries()) await expect(page.getByRole('spinbutton').nth(index)).toHaveValue(value);
+  await expect(memoInput(page)).toHaveValue('synthetic unsaved squat');
+  await page.getByRole('button', { name: '記録する', exact: true }).click();
+  await expect.poll(async () => (await ledger(page)).length).toBe(1);
+  expect((await ledger(page))[0]).toMatchObject({ exercise: 'バーベル・スクワット', part: '脚', weight: 82.5, reps: 7, rir: rir === '' ? null : 0, interval: 95, formScore: 'good', memo: 'synthetic unsaved squat' });
+});
+}
+
 for (const [sound, wake] of [['sound', 'off'], ['silent', 'on']]) {
 test(`real JSON export/import round trip includes raw preferences ${sound}/${wake} and retains the original`, async ({ page, browser, baseURL }) => {
   const original = [makeSet('a-1')];

@@ -26,7 +26,7 @@ npm run dev
 - **Training Science Engine** (`src/lib/trainingEngine.js`):
   - Calculates estimated 1RM (Epley formula), mesocycle progression (4-week periodization), RIR (Reps in Reserve) targets, and compound vs. isolation rest intervals.
 - **Mobile & PWA Capabilities**:
-  - `public/manifest.json` & `public/sw.js`: Full offline-ready PWA with network-first caching and `SKIP_WAITING` instant update detection (`src/hooks/useMobileFeatures.js`).
+  - `public/manifest.json` & `public/sw.js`: Offline-ready PWA with an immutable, versioned executable shell and explicit `SKIP_WAITING` update activation (`src/hooks/useMobileFeatures.js`).
   - **Screen Wake Lock API**: Prevents smartphone screen dimming during active sessions and interval timers.
   - **Haptics & Native Notifications** (`src/lib/audio.js`): Web Audio API synthetic countdown/alarm beeps, Web Vibration API haptics, and Service Worker notifications.
   - **Cross-Device Sync** (`src/services/mobileSync.js` & `src/components/Mobile/MobileSyncModal.jsx`):

@@ -310,7 +310,14 @@ export default function SettingsView({
                             if (onCheckUpdate) {
                                 const res = await onCheckUpdate();
                                 if (onShowFeedback) {
-                                    onShowFeedback(res === 'update_found' ? '新しいバージョンが見つかりました！' : 'すでに最新バージョンを使用中です✨');
+                                    const notices = {
+                                        update_found: '新しいバージョンが見つかりました！',
+                                        checking: '新しいバージョンを確認中です。準備ができると更新ボタンを表示します。',
+                                        up_to_date: 'すでに最新バージョンを使用中です✨',
+                                        check_failed: '更新状況を確認できません。接続を確認して再試行してください。',
+                                        unavailable: 'この環境では更新状況を確認できません。'
+                                    };
+                                    onShowFeedback(notices[res] || notices.unavailable);
                                 }
                             }
                         }}

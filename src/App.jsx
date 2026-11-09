@@ -765,8 +765,8 @@ function App() {
         )}
 
         {/* === TAB A: CHAT & LOG === */}
-        {activeTab === 'home' && (
-          <div className="p-4 pt-6 pb-32 space-y-5">
+        {/* Keep the draft's local fields mounted while another tab is visible. */}
+          <div hidden={activeTab !== 'home'} className="p-4 pt-6 pb-32 space-y-5">
             <header className="flex justify-between items-center gap-2 mb-1">
               <div>
                 <span className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block">Training Session</span>
@@ -830,7 +830,6 @@ function App() {
 
 
           </div>
-        )}
 
         {/* === TAB B: HISTORY === */}
         {activeTab === 'history' && (

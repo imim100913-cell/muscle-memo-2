@@ -1,5 +1,7 @@
 # Draft PR #1：独立QA引継ぎ（2026-11-09）
 
+> この資料はa94fa2b時点の記録です。その後のPWA更新・未保存入力・依存関係の監査と修正は[自律PM/QAの追加監査](P0-02-autonomous-audit.md)を参照してください。
+
 対象は既存PRの `work/p0-02-data-integrity`。開始時headは `2beb1fb26599980dde7e3138f6a0408de3bd28f9`、baseは `71d37ec9bcf3e9689975c503e216bdaa06a83ab4`。本資料は実装者による回帰検証報告であり、独立QAの合格や公開承認ではありません。
 
 ## 今回の変更

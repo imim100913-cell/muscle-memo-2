@@ -193,18 +193,20 @@ export function useMobileFeatures({ autoWakeLock = false } = {}) {
 
   const checkForLatestVersion = useCallback(async () => {
     const reg = swRegistrationRef.current;
-    if (reg) {
-      try {
-        await reg.update();
-        if (reg.waiting) {
-          setUpdateAvailable(true);
-          return 'update_found';
-        }
-      } catch {
-        // Ignore
+    if (!reg) return 'unavailable';
+    if (!navigator.onLine) return 'check_failed';
+    try {
+      await reg.update();
+      if (reg.waiting) {
+        setUpdateAvailable(true);
+        return 'update_found';
       }
+      // update() can resolve while the new worker is still installing.
+      // The statechange listener will expose the update once its shell is ready.
+      return reg.installing ? 'checking' : 'up_to_date';
+    } catch {
+      return 'check_failed';
     }
-    return 'up_to_date';
   }, []);
 
   return {
