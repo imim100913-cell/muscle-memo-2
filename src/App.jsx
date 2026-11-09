@@ -108,6 +108,7 @@ function App() {
     formScore: null,
     interval: 120 
   });
+  const lastSavedEntryRef = useRef(null);
   const [feedbackMsg, setFeedbackMsg] = useState(null);
   const [workoutState, setWorkoutState] = useState('setup');
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -473,6 +474,16 @@ function App() {
     setCurrentEntry(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data);
   }, []);
 
+  const handleApplyUpdate = () => {
+    const hasInput = ['weight', 'reps', 'rir', 'memo', 'formScore'].some(key =>
+      currentEntry[key] !== '' && currentEntry[key] != null
+    );
+    const hasUnsavedInput = hasInput && (!lastSavedEntryRef.current ||
+      Object.keys(currentEntry).some(key => currentEntry[key] !== lastSavedEntryRef.current[key]));
+    if (hasUnsavedInput && !window.confirm('更新すると入力中のセット内容は消えます。先に記録する場合はキャンセルしてください。今すぐ更新しますか？')) return;
+    applyUpdate();
+  };
+
   // Trigger from WorkoutForm (Advice / Exercise changed)
   const handleAiTrigger = (trigger) => {
     if (typeof trigger === 'object' && trigger !== null) {
@@ -552,7 +563,9 @@ function App() {
     if (!result.success) { showFeedback(result.error); return; }
 
     // Clear free memo for the next set
-    setCurrentEntry(prev => ({ ...prev, memo: '' }));
+    const nextEntry = { ...currentEntry, memo: '' };
+    lastSavedEntryRef.current = nextEntry;
+    setCurrentEntry(nextEntry);
 
     // Start interval timer automatically on set completion
     if (intervalVal > 0) {
@@ -705,7 +718,7 @@ function App() {
             </div>
             <button
               type="button"
-              onClick={applyUpdate}
+              onClick={handleApplyUpdate}
               className="px-3 py-1 bg-white text-emerald-700 rounded-full text-[11px] font-extrabold shadow-sm active:scale-95 transition-all"
             >
               今すぐ更新

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'muscle-memo-p0-02-d0fba8c70cc1f424';
+const CACHE_VERSION = 'muscle-memo-p0-02-0bebeb22db1a40bb';
 const STATIC_ASSETS = [
   './',
   './index.html',

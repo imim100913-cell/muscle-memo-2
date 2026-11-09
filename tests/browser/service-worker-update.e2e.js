@@ -93,6 +93,7 @@ test('real two-release update preserves the waiting draft and activates a comple
     await page.evaluate(() => caches.open('unrelated-qa-app-cache'));
     await page.getByRole('button', { name: /トレーニングセッションを開始する/ }).click();
     await page.getByRole('spinbutton').nth(0).fill('80'); await page.getByRole('spinbutton').nth(1).fill('10');
+    await page.getByRole('spinbutton').nth(2).fill('0');
     const memo = page.getByPlaceholder(/フォーム意識、トップ/); await memo.fill('draft during real v2 install');
     server.state.version = 2;
     server.state.holdNewAsset = new Promise(resolve => { releaseNewAsset = resolve; });
@@ -104,6 +105,15 @@ test('real two-release update preserves the waiting draft and activates a comple
     await expect(page.getByRole('button', { name: '今すぐ更新', exact: true })).toBeVisible();
     await expect(memo).toHaveValue('draft during real v2 install');
     await expect(page.locator('html')).toHaveAttribute('data-qa-version', '1');
+    let updateConfirmation = '';
+    page.once('dialog', async dialog => { updateConfirmation = dialog.message(); await dialog.dismiss(); });
+    await page.getByRole('button', { name: '今すぐ更新', exact: true }).click();
+    expect(updateConfirmation).toContain('入力中のセット内容は消えます');
+    await expect(memo).toHaveValue('draft during real v2 install');
+    await expect(page.getByRole('spinbutton').nth(0)).toHaveValue('80');
+    await expect(page.getByRole('spinbutton').nth(1)).toHaveValue('10');
+    await expect(page.getByRole('spinbutton').nth(2)).toHaveValue('0');
+    await expect(page.locator('html')).toHaveAttribute('data-qa-version', '1');
     // A second page still uses the active v1 shell and waits for the real lock.
     const waiting = await context.newPage(); await waiting.goto(server.url);
     await expect(waiting.getByRole('status')).toContainText('別のタブ');
@@ -111,7 +121,10 @@ test('real two-release update preserves the waiting draft and activates a comple
     await page.getByRole('button', { name: '記録する', exact: true }).click();
     await expect.poll(() => page.evaluate(key => JSON.parse(localStorage.getItem(key)).length, ledgerKey)).toBe(2);
     const beforeUpdate = await page.evaluate(key => localStorage.getItem(key), ledgerKey);
+    const unexpectedDialogs = [];
+    page.on('dialog', async dialog => { unexpectedDialogs.push(dialog.message()); await dialog.dismiss(); });
     await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: '今すぐ更新', exact: true }).click()]);
+    expect(unexpectedDialogs).toEqual([]);
     await expect(page.getByRole('button', { name: '設定', exact: true })).toBeVisible();
     await expect(page.locator('html')).toHaveAttribute('data-qa-version', '2');
     await context.setOffline(true); await page.reload();
@@ -159,10 +172,12 @@ test('the actual a94fa2b service worker upgrades to the repaired worker without 
     await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
     await expect(page.getByRole('button', { name: '今すぐ更新', exact: true })).toBeVisible();
     await expect(page.getByPlaceholder(/フォーム意識、トップ/)).toHaveValue('synthetic legacy SW upgrade');
-    await page.getByRole('button', { name: '記録する', exact: true }).click();
-    await expect.poll(() => page.evaluate(key => JSON.parse(localStorage.getItem(key)).length, ledgerKey)).toBe(2);
+    // Explicitly discarding this draft must still allow the requested update.
     const beforeUpdate = await page.evaluate(key => localStorage.getItem(key), ledgerKey);
+    let updateConfirmation = '';
+    page.once('dialog', async dialog => { updateConfirmation = dialog.message(); await dialog.accept(); });
     await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: '今すぐ更新', exact: true }).click()]);
+    expect(updateConfirmation).toContain('入力中のセット内容は消えます');
     await expect(page.getByRole('button', { name: '設定', exact: true })).toBeVisible();
     await expect(page.locator('html')).toHaveAttribute('data-qa-version', '2');
     await context.setOffline(true); await page.reload();
