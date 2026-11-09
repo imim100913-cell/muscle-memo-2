@@ -31,7 +31,7 @@ npm run dev
   - **Haptics & Native Notifications** (`src/lib/audio.js`): Web Audio API synthetic countdown/alarm beeps, Web Vibration API haptics, and Service Worker notifications.
   - **Cross-Device Sync** (`src/services/mobileSync.js` & `src/components/Mobile/MobileSyncModal.jsx`):
     - Serverless compressed URL token transfer (`#sync=z...` using `CompressionStream('deflate-raw')`) with non-destructive workout session merging.
-    - Optional LAN bridge endpoints (`/api/network-info`, `/api/sync-state`) injected by `vite.config.js` during local dev/preview.
+    - LAN QR and automatic sync are disabled: this version has no verified secure LAN bridge. The legacy HTTP bridge endpoints have been removed. Use manual tokens/URLs or JSON backups. HTTPS and Web Locks are required; LAN HTTP is unsupported.
 
 ## 3. Data Storage & Conventions
 

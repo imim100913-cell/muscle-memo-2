@@ -2,13 +2,8 @@ import { decodeStoredValue } from '../lib/storageSchema.js';
 import { persistEntries, recoverPending } from '../lib/persistence.js';
 import { mergeWorkoutSets, migrateToFlatWorkouts } from '../lib/workoutMigration.js';
 
-/**
- * Anti-Gravity 2.0: PC <=> Smartphone Instant Bridge & Smart Data Merge Service
- * Supports:
- * 1. Local Wi-Fi (LAN) instant state transfer via Vite Mobile Bridge API (/api/sync-state)
- * 2. Serverless compressed URL / Share token transfer (CompressionStream + Base64URL)
- * 3. Non-destructive smart workout merging (combines PC and Smartphone logs without data loss)
- */
+// Manual transfer only. The legacy unauthenticated HTTP LAN bridge is disabled.
+// A future LAN bridge needs verified HTTPS, browser support and access control.
 
 export function collectLocalSyncData(includeApiKey = false) {
   recoverPending(localStorage);
@@ -83,49 +78,6 @@ export function restoreBackup(payload) {
   if (payload?.application !== 'Anti-Gravity Workout Tracker' || payload.version !== '2.0' || !payload.data || Array.isArray(payload.data)) throw new Error('バックアップ形式が不正です');
   const data = Object.fromEntries(Object.entries(payload.data).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]));
   return applySyncedData(data, 'overwrite');
-}
-
-/**
- * Queries the local Vite Mobile Bridge for LAN IP and sync snapshot status.
- */
-export async function fetchNetworkInfo() {
-  try {
-    const res = await fetch('/api/network-info', { cache: 'no-store' });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Pushes current device's localStorage state to the Vite Mobile Bridge server.
- */
-export async function pushSyncSnapshotToServer(sourceDevice = 'PC', includeApiKey = false) {
-  const data = collectLocalSyncData(includeApiKey);
-  const res = await fetch('/api/sync-state', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sourceDevice,
-      data
-    })
-  });
-  if (!res.ok) {
-    throw new Error('ローカル同期サーバーへの送信に失敗しました');
-  }
-  return await res.json();
-}
-
-/**
- * Pulls the latest shared snapshot from the Vite Mobile Bridge server.
- */
-export async function pullSyncSnapshotFromServer() {
-  const res = await fetch('/api/sync-state', { cache: 'no-store' });
-  if (!res.ok) {
-    throw new Error('ローカル同期サーバーからの取得に失敗しました');
-  }
-  return await res.json();
 }
 
 /**

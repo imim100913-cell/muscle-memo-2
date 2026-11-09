@@ -6,6 +6,7 @@ import App from '../src/App.jsx';
 import Onboarding from '../src/components/Onboarding/Onboarding.jsx';
 import SettingsView from '../src/components/Settings/SettingsView.jsx';
 import HistoryView from '../src/components/History/HistoryView.jsx';
+import MobileSyncModal from '../src/components/Mobile/MobileSyncModal.jsx';
 import { GeminiService } from '../src/services/gemini.js';
 import { useLocalStorage } from '../src/hooks/useLocalStorage.js';
 
@@ -169,10 +170,10 @@ it('actual App sends null RIR/form and explicit session identities to AI', async
   expect(context.todaySession.sets[0].sessionId).toBe(context.todaySession.sessionId);
 });
 
-it('actual Settings JSON export restores legitimate raw preferences and ledger together', async () => {
+it.each([['sound', 'off'], ['silent', 'on']])('actual Settings JSON export restores raw preferences (%s/%s) and ledger together', async (sound, wake) => {
   const original = [{ id: 'fixture', timestamp: Date.now(), exercise: 'x', weight: 80, reps: 10, rir: 0, formScore: null }];
   const values = {
-    'muscle-memo-sound-mode': 'silent', 'muscle-memo-category-priority': 'free_weight', 'muscle-memo-wakelock': 'on',
+    'muscle-memo-sound-mode': sound, 'muscle-memo-category-priority': 'free_weight', 'muscle-memo-wakelock': wake,
     [key]: JSON.stringify(original)
   };
   for (const [k, v] of Object.entries(values)) localStorage.setItem(k, v);
@@ -214,4 +215,69 @@ it('actual clear action rolls back deletion state, ledger and settings when ledg
   expect(localStorage.getItem('muscle-memo-onboarded')).toBe('true');
   expect(alert).toHaveBeenCalledWith(expect.stringContaining('保存に失敗'));
   expect(screen.queryByText('記録と設定を初期化しました。')).toBeNull();
+});
+
+it('actual mobile UI disables LAN without contacting a bridge and always explains transfer privacy', () => {
+  render(<MobileSyncModal isOpen />);
+  expect(screen.getByRole('status').textContent).toContain('HTTPSとWeb Locks');
+  expect(screen.getByRole('status').textContent).toContain('動作保証しません');
+  expect(screen.getByRole('button', { name: 'この端末から送信' }).disabled).toBe(true);
+  expect(screen.getByRole('button', { name: '他端末から受信・統合' }).disabled).toBe(true);
+  expect(screen.queryByRole('img')).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'URL・コードで手動移行する' }));
+  expect(screen.getByRole('note').textContent).toContain('暗号化されていません');
+  expect(screen.getByRole('note').textContent).toContain('APIキーを含めなくても');
+  expect(screen.getByRole('checkbox').checked).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'アプリ化 (PWA)' }));
+  expect(screen.getByText(/HTTPのLANアドレスは開いたままでも利用できません/)).toBeTruthy();
+});
+
+it.each([
+  'muscle-memo-internal-before-reset-workouts', 'muscle-memo-deletion-state',
+  'muscle-memo-user', 'muscle-memo-coach', 'muscle-memo-gemini-key',
+  'muscle-memo-gemini-model', 'muscle-memo-custom-exercises', 'muscle-memo-onboarded', key
+])('actual clear action restores all preimages after a one-shot failure at %s', failedKey => {
+  const before = {
+    [key]: JSON.stringify([{ id: 'synthetic', timestamp: 1794096000000, exercise: 'x', weight: 80, reps: 10 }]),
+    'muscle-memo-internal-before-reset-workouts': '["older synthetic copy"]',
+    'muscle-memo-deletion-state': JSON.stringify({ deletedIds: ['older-id'], deletedAt: 1 }),
+    'muscle-memo-user': '"original name"', 'muscle-memo-coach': '"gentle"',
+    'muscle-memo-gemini-key': '""', 'muscle-memo-gemini-model': '"synthetic-model"',
+    'muscle-memo-custom-exercises': '{"胸":["synthetic exercise"]}', 'muscle-memo-onboarded': 'true'
+  };
+  for (const [k, v] of Object.entries(before)) localStorage.setItem(k, v);
+  render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: '設定' }));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+  const native = Storage.prototype.setItem;
+  let failed = false;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(k, v) {
+    if (k === failedKey && !failed) { failed = true; throw new DOMException('synthetic quota', 'QuotaExceededError'); }
+    return native.call(this, k, v);
+  });
+  fireEvent.click(screen.getByRole('button', { name: '記録と設定を初期化' }));
+  expect(failed).toBe(true);
+  expect(alert).toHaveBeenCalledWith(expect.stringContaining('保存に失敗'));
+  for (const [k, v] of Object.entries(before)) expect(localStorage.getItem(k)).toBe(v);
+  expect(localStorage.getItem('muscle-memo-internal-pending')).toBeNull();
+  expect(localStorage.getItem('muscle-memo-internal-original-workouts')).toBe(before[key]);
+});
+
+it('actual clear action rejects an externally changed ledger before creating deletion metadata', () => {
+  localStorage.setItem('muscle-memo-onboarded', 'true');
+  localStorage.setItem(key, '[]');
+  render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: '設定' }));
+  const external = JSON.stringify([{ id: 'external-synthetic', timestamp: 1794096000000, exercise: 'x', weight: 80, reps: 10 }]);
+  localStorage.setItem(key, external);
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+  fireEvent.click(screen.getByRole('button', { name: '記録と設定を初期化' }));
+  expect(alert).toHaveBeenCalledWith(expect.stringContaining('別の画面'));
+  expect(localStorage.getItem(key)).toBe(external);
+  expect(localStorage.getItem('muscle-memo-deletion-state')).toBeNull();
+  expect(localStorage.getItem('muscle-memo-internal-before-reset-workouts')).toBeNull();
+  expect(localStorage.getItem('muscle-memo-internal-pending')).toBeNull();
 });

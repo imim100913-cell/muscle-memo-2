@@ -18,7 +18,7 @@ import { calculate1RM, getLocalDateKey, createUniqueId } from './lib/utils';
 import { migrateToFlatWorkouts, normalizeSingleSet } from './lib/workoutMigration.js';
 import { GeminiService, parseGeminiError, DEFAULT_GEMINI_MODEL } from './services/gemini';
 import { playBeep, unlockAudio, triggerHaptic, sendTimerNotification } from './lib/audio';
-import { pullSyncSnapshotFromServer, decodeSyncToken, applySyncedData } from './services/mobileSync';
+import { decodeSyncToken, applySyncedData } from './services/mobileSync';
 
 // Local Fallback AI Triggers per Coach
 const LOCAL_COACH_TRIGGERS = {
@@ -114,7 +114,7 @@ function App() {
   const [hasUnread, setHasUnread] = useState(false);
   const [restTimer, setRestTimer] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(() => new URLSearchParams(window.location.search).get('sync') === 'lan');
   const [incomingSyncOffer, setIncomingSyncOffer] = useState(null);
 
   // --- Mobile & PWA Capabilities ---
@@ -145,14 +145,13 @@ function App() {
     }
   }, [isChatOpen]);
 
-  // Detect incoming QR / Portable URL sync on launch (?sync=lan or #sync=...)
+  // Only portable tokens can offer incoming data. Legacy ?sync=lan opens help.
   useEffect(() => {
     let cancelled = false;
     let sequence = 0;
     const detectIncomingSync = async () => {
       const request = ++sequence;
       await Promise.resolve();
-      const params = new URLSearchParams(window.location.search);
       const hash = window.location.hash || '';
 
       // 1. Portable compressed URL (#sync=...)
@@ -172,23 +171,6 @@ function App() {
           // Ignore malformed hash
         }
         return;
-      }
-
-      // 2. Local Wi-Fi QR Code scan (?sync=lan)
-      if (params.get('sync') === 'lan') {
-        try {
-          const res = await pullSyncSnapshotFromServer();
-          if (!cancelled && request === sequence && res?.snapshot?.data) {
-            setIncomingSyncOffer({
-              type: 'lan',
-              source: res.snapshot.sourceDevice || 'PC',
-              data: res.snapshot.data
-            });
-            window.history.replaceState(null, '', window.location.pathname);
-          }
-        } catch {
-          // Ignore if bridge not reachable
-        }
       }
     };
     detectIncomingSync();
@@ -638,6 +620,18 @@ function App() {
     return result;
   };
 
+  const mobileSyncModal = (
+    <MobileSyncModal
+      isOpen={isSyncModalOpen}
+      onClose={() => setIsSyncModalOpen(false)}
+      onShowFeedback={showFeedback}
+      canInstallPwa={canInstallPwa}
+      isStandalone={isStandalone}
+      isIos={isIos}
+      onInstallPwa={installPwa}
+    />
+  );
+
   if (!isOnboarded && storageError) {
     return <div role="alert" className="p-6 text-red-800">{storageError} ブラウザの保存設定を確認して再読み込みしてください。</div>;
   }
@@ -672,6 +666,7 @@ function App() {
             </div>
           </div>
         )}
+        {mobileSyncModal}
         <Onboarding
           onComplete={(data) => {
             const results = [setUserName(data.userName), setApiKey(data.apiKey), setCoachType(data.coachType)];
@@ -869,16 +864,7 @@ function App() {
         )}
       </main>
 
-      {/* Mobile QR Bridge, Sync & PWA Modal */}
-      <MobileSyncModal
-        isOpen={isSyncModalOpen}
-        onClose={() => setIsSyncModalOpen(false)}
-        onShowFeedback={showFeedback}
-        canInstallPwa={canInstallPwa}
-        isStandalone={isStandalone}
-        isIos={isIos}
-        onInstallPwa={installPwa}
-      />
+      {mobileSyncModal}
 
       <FloatingNav
         activeTab={activeTab}

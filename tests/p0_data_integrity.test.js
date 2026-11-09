@@ -173,11 +173,11 @@ it('generates independent secure IDs on LAN HTTP without randomUUID', () => {
   vi.unstubAllGlobals();
 });
 
-it('round trips actual raw preferences and structured ledger without changing their encodings', () => {
+it.each([['sound', 'off'], ['silent', 'on']])('round trips actual raw preferences (%s/%s) and structured ledger without changing their encodings', (sound, wake) => {
   const data = {
-    'muscle-memo-sound-mode': 'silent',
+    'muscle-memo-sound-mode': sound,
     'muscle-memo-category-priority': 'free_weight',
-    'muscle-memo-wakelock': 'on',
+    'muscle-memo-wakelock': wake,
     'muscle-memo-haptics': 'off',
     'muscle-memo-custom-order-胸': JSON.stringify(['ベンチプレス']),
     'muscle-memo-user': JSON.stringify('synthetic tester'),

@@ -21,6 +21,12 @@ async function goActive(page) {
 async function ledger(page) { return page.evaluate(key => JSON.parse(localStorage.getItem(key) || '[]'), WORKOUTS); }
 const memoInput = page => page.getByPlaceholder(/フォーム意識、トップ/);
 
+async function serveBuiltApp(route) {
+  const pathname = new URL(route.request().url()).pathname;
+  // Serve the actual build under a test origin; no remote site or user data is used.
+  await route.fulfill({ path: new URL(`../../docs${pathname === '/' ? '/index.html' : pathname}`, import.meta.url).pathname });
+}
+
 test.beforeEach(async ({ context }) => {
   // This suite never talks to real AI services or the production site.
   await context.route('**/*', route => {
@@ -52,9 +58,10 @@ test('new onboarding, memo tags, missing values and RIR zero persist through rel
   expect(errors).toEqual([]);
 });
 
-test('real JSON export/import round trip includes raw preferences and retains the original', async ({ page, browser, baseURL }) => {
+for (const [sound, wake] of [['sound', 'off'], ['silent', 'on']]) {
+test(`real JSON export/import round trip includes raw preferences ${sound}/${wake} and retains the original`, async ({ page, browser, baseURL }) => {
   const original = [makeSet('a-1')];
-  await seed(page, { [WORKOUTS]: JSON.stringify(original), 'muscle-memo-onboarded': 'true', 'muscle-memo-sound-mode': 'silent', 'muscle-memo-category-priority': 'free_weight', 'muscle-memo-wakelock': 'on' });
+  await seed(page, { [WORKOUTS]: JSON.stringify(original), 'muscle-memo-onboarded': 'true', 'muscle-memo-sound-mode': sound, 'muscle-memo-category-priority': 'free_weight', 'muscle-memo-wakelock': wake });
   await page.goto('/');
   await page.getByRole('button', { name: '設定', exact: true }).click();
   const downloadEvent = page.waitForEvent('download');
@@ -62,7 +69,7 @@ test('real JSON export/import round trip includes raw preferences and retains th
   const download = await downloadEvent;
   const bytes = await readFile(await download.path());
   const backup = JSON.parse(bytes.toString());
-  expect(backup.data['muscle-memo-sound-mode']).toBe('silent');
+  expect(backup.data['muscle-memo-sound-mode']).toBe(sound);
   expect(backup.data['muscle-memo-gemini-key']).toBeUndefined();
   const context = await browser.newContext({ baseURL });
   await context.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
@@ -77,9 +84,10 @@ test('real JSON export/import round trip includes raw preferences and retains th
     await expect.poll(async () => (await ledger(receiver)).length).toBe(2);
     await expect(receiver.getByRole('button', { name: '設定', exact: true })).toBeVisible();
     const snapshot = await receiver.evaluate(() => ({ sound: localStorage.getItem('muscle-memo-sound-mode'), category: localStorage.getItem('muscle-memo-category-priority'), wake: localStorage.getItem('muscle-memo-wakelock'), original: localStorage.getItem('muscle-memo-internal-original-workouts') }));
-    expect(snapshot).toEqual({ sound: 'silent', category: 'free_weight', wake: 'on', original: JSON.stringify(local) });
+    expect(snapshot).toEqual({ sound, category: 'free_weight', wake, original: JSON.stringify(local) });
   } finally { await receiver.close(); await context.close(); }
 });
+}
 
 test('same-day independent device sessions survive sync and repeated sync is stable', async ({ page }) => {
   await seed(page, { [WORKOUTS]: JSON.stringify([1, 2, 3].map(n => makeSet(`a-${n}`, n))), 'muscle-memo-onboarded': 'true' });
@@ -234,4 +242,135 @@ test('blocked localStorage is reported without mounting a fake empty ledger', as
   await page.goto('/');
   await expect(page.getByRole('alert')).toContainText('読み出せません');
   await expect(page.getByRole('button', { name: /スキップしてデフォルトで開始/ })).toHaveCount(0);
+});
+
+test('legacy LAN URL and mobile settings show disabled LAN controls without bridge or QR requests', async ({ page }) => {
+  const requests = [];
+  page.on('request', request => requests.push(request.url()));
+  await page.goto('/?sync=lan');
+  await expect(page.getByRole('status')).toContainText('LAN QR接続・自動同期は利用できません');
+  await expect(page.getByRole('status')).toContainText('HTTP接続');
+  await expect(page.getByRole('status')).toContainText('動作保証しません');
+  await expect(page.getByRole('button', { name: 'この端末から送信' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '他端末から受信・統合' })).toBeDisabled();
+  await expect(page.getByAltText('Smartphone Access QR Code')).toHaveCount(0);
+  await page.getByRole('button', { name: 'URL・コードで手動移行する' }).click();
+  await expect(page.getByRole('note')).toContainText('APIキーを含めなくても');
+  await expect(page.getByRole('note')).toContainText('暗号化されていません');
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await page.getByRole('button', { name: 'アプリ化 (PWA)' }).click();
+  await expect(page.getByText(/HTTPのLANアドレスは開いたままでも利用できません/)).toBeVisible();
+  expect(requests.filter(url => /\/api\/(network-info|sync-state)|qrserver/.test(url))).toEqual([]);
+});
+
+test('a real non-secure HTTP origin has no Web Locks and cannot mount or modify the ledger', async ({ page }) => {
+  const original = JSON.stringify([makeSet('http-synthetic-1')]);
+  await seed(page, { [WORKOUTS]: original });
+  await page.route('http://lan-http-qa.invalid/**', serveBuiltApp);
+  await page.goto('http://lan-http-qa.invalid/?sync=lan');
+  expect(await page.evaluate(() => isSecureContext)).toBe(false);
+  expect(await page.evaluate(() => !!navigator.locks)).toBe(false);
+  await expect(page.getByRole('status')).toContainText('HTTPS');
+  await expect(page.getByRole('button')).toHaveCount(0);
+  expect(await page.evaluate(key => localStorage.getItem(key), WORKOUTS)).toBe(original);
+});
+
+test('HTTPS without a secure bridge disables LAN and shares only a portable HTTPS URL with a privacy notice', async ({ page }) => {
+  const requests = []; page.on('request', request => requests.push(request.url()));
+  await seed(page, { [WORKOUTS]: JSON.stringify([makeSet('https-synthetic-1')]), 'muscle-memo-onboarded': 'true' });
+  await page.route('https://secure-qa.invalid/**', serveBuiltApp);
+  await page.goto('https://secure-qa.invalid/?sync=lan');
+  expect(await page.evaluate(() => isSecureContext && !!navigator.locks)).toBe(true);
+  await expect(page.getByRole('status')).toContainText('HTTPSのページを開くだけではLAN同期はできません');
+  await expect(page.getByRole('button', { name: 'この端末から送信' })).toBeDisabled();
+  await page.getByRole('button', { name: 'URL・コードで手動移行する' }).click();
+  await expect(page.getByRole('note')).toContainText('暗号化されていません');
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__syntheticUrl = text; } } });
+  });
+  await page.getByRole('button', { name: 'データ引き継ぎURLを共有 / コピー' }).click();
+  await expect.poll(() => page.evaluate(() => window.__syntheticUrl)).toMatch(/^https:\/\/secure-qa\.invalid\/#sync=[zu]\./);
+  expect(requests.filter(url => /\/api\/(network-info|sync-state)|qrserver/.test(url))).toEqual([]);
+});
+
+for (const [sound, wake] of [['sound', 'off'], ['silent', 'on']]) {
+test(`actual portable code round trip preserves raw preferences ${sound}/${wake} without a LAN bridge`, async ({ page, browser, baseURL }) => {
+  const original = [makeSet('portable-1')];
+  await seed(page, { [WORKOUTS]: JSON.stringify(original), 'muscle-memo-onboarded': 'true', 'muscle-memo-sound-mode': sound, 'muscle-memo-category-priority': 'free_weight', 'muscle-memo-wakelock': wake, 'muscle-memo-gemini-key': '"SYNTHETIC_NOT_A_KEY"' });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'スマホ連携', exact: true }).click();
+  await page.getByRole('button', { name: 'URL・コードで手動移行する' }).click();
+  // Capture only the clipboard boundary; token generation, compression and storage are production code.
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__syntheticCode = text; } } }));
+  await page.getByRole('button', { name: '同期コードをコピー', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__syntheticCode)).toMatch(/^[zu]\./);
+  const code = await page.evaluate(() => window.__syntheticCode);
+  const receiverContext = await browser.newContext({ baseURL });
+  await receiverContext.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  const receiver = await receiverContext.newPage();
+  try {
+    const existing = [makeSet('receiver-1')];
+    await seed(receiver, { [WORKOUTS]: JSON.stringify(existing), 'muscle-memo-onboarded': 'true' });
+    await receiver.goto('/');
+    await receiver.getByRole('button', { name: 'スマホ連携', exact: true }).click();
+    await receiver.getByRole('button', { name: 'URL・コードで手動移行する' }).click();
+    await receiver.getByPlaceholder('https://...#sync=z.... を貼り付け').fill(code);
+    await Promise.all([receiver.waitForEvent('load'), receiver.getByRole('button', { name: '統合', exact: true }).click()]);
+    await expect(receiver.getByRole('button', { name: '設定', exact: true })).toBeVisible();
+    expect((await ledger(receiver)).map(set => set.id).sort()).toEqual(['portable-1', 'receiver-1']);
+    const stored = await receiver.evaluate(() => Object.fromEntries(Object.entries(localStorage)));
+    expect(stored['muscle-memo-sound-mode']).toBe(sound);
+    expect(stored['muscle-memo-category-priority']).toBe('free_weight');
+    expect(stored['muscle-memo-wakelock']).toBe(wake);
+    expect(stored['muscle-memo-gemini-key']).toBeUndefined();
+    expect(stored['muscle-memo-internal-original-workouts']).toBe(JSON.stringify(existing));
+  } finally { await receiverContext.close(); }
+});
+}
+
+test('waiting tab recovers a real failed clear transaction after rollback failure, then retries consistently', async ({ page, context }) => {
+  const original = JSON.stringify([makeSet('a-1')]);
+  const olderBackup = '["older synthetic archive"]';
+  const initial = {
+    [WORKOUTS]: original, 'muscle-memo-onboarded': 'true', 'muscle-memo-user': '"original name"',
+    'muscle-memo-internal-original-workouts': original,
+    'muscle-memo-internal-before-reset-workouts': olderBackup
+  };
+  await seed(page, initial); await page.goto('/');
+  const waiting = await context.newPage(); await waiting.goto('/');
+  await expect(waiting.getByRole('status')).toContainText('別のタブ');
+  await page.getByRole('button', { name: '設定', exact: true }).click();
+  const dialogs = []; page.on('dialog', async dialog => { dialogs.push(dialog.message()); await dialog.accept(); });
+  await page.evaluate(({ key, olderBackup }) => {
+    const native = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k, v) {
+      if (k === key && v === '[]') throw new DOMException('synthetic ledger failure', 'QuotaExceededError');
+      if (k === 'muscle-memo-internal-before-reset-workouts' && v === olderBackup) throw new DOMException('synthetic rollback failure', 'SecurityError');
+      return native.call(this, k, v);
+    };
+  }, { key: WORKOUTS, olderBackup });
+  await page.getByRole('button', { name: '記録と設定を初期化', exact: true }).click();
+  await expect.poll(() => dialogs.some(text => text.includes('保存に失敗'))).toBe(true);
+  const interrupted = await page.evaluate(() => ({ pending: localStorage.getItem('muscle-memo-internal-pending'), marker: localStorage.getItem('muscle-memo-deletion-state') }));
+  expect(interrupted.pending).not.toBeNull(); expect(interrupted.marker).not.toBeNull();
+  // The waiting page must not recover or mount against the owner's partial transaction.
+  await expect(waiting.getByRole('status')).toContainText('別のタブ');
+  expect(await waiting.evaluate(() => localStorage.getItem('muscle-memo-internal-pending'))).toBe(interrupted.pending);
+  await page.close();
+  await expect(waiting.getByRole('button', { name: '設定', exact: true })).toBeVisible();
+  const recovered = await waiting.evaluate(() => Object.fromEntries(Object.entries(localStorage)));
+  for (const [key, value] of Object.entries(initial)) expect(recovered[key]).toBe(value);
+  expect(recovered[DELETION]).toBeUndefined(); expect(recovered['muscle-memo-internal-pending']).toBeUndefined();
+  await waiting.getByRole('button', { name: '設定', exact: true }).click();
+  waiting.on('dialog', dialog => dialog.accept());
+  await Promise.all([waiting.waitForEvent('load'), waiting.getByRole('button', { name: '記録と設定を初期化', exact: true }).click()]);
+  await expect(waiting.getByRole('button', { name: /スキップしてデフォルトで開始/ })).toBeVisible();
+  const committed = await waiting.evaluate(() => Object.fromEntries(Object.entries(localStorage)));
+  expect(committed[WORKOUTS]).toBe('[]');
+  expect(JSON.parse(committed[DELETION]).deletedIds).toEqual(['a-1']);
+  expect(committed['muscle-memo-internal-before-reset-workouts']).toBe(original);
+  expect(committed['muscle-memo-internal-original-workouts']).toBe(original);
+  expect(committed['muscle-memo-internal-pending']).toBeUndefined();
 });

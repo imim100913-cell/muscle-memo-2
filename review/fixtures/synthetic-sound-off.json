@@ -1,0 +1,14 @@
+{
+  "application": "Anti-Gravity Workout Tracker",
+  "version": "2.0",
+  "data": {
+    "muscle-memo-workouts": "[{\"id\":\"independent-qa-1\",\"sessionId\":\"independent-qa\",\"date\":\"2026-11-08\",\"timestamp\":1794096001000,\"part\":\"胸\",\"exercise\":\"ベンチプレス\",\"setNum\":1,\"weight\":80,\"reps\":10,\"rir\":null,\"formScore\":null,\"memo\":\"合成QAセット 1\"},{\"id\":\"independent-qa-2\",\"sessionId\":\"independent-qa\",\"date\":\"2026-11-08\",\"timestamp\":1794096002000,\"part\":\"胸\",\"exercise\":\"ベンチプレス\",\"setNum\":2,\"weight\":80,\"reps\":10,\"rir\":0,\"formScore\":null,\"memo\":\"合成QAセット 2\"}]",
+    "muscle-memo-user": "\"独立QA（合成データ）\"",
+    "muscle-memo-onboarded": "true",
+    "muscle-memo-sound-mode": "sound",
+    "muscle-memo-category-priority": "free_weight",
+    "muscle-memo-wakelock": "off",
+    "muscle-memo-haptics": "off",
+    "muscle-memo-custom-exercises": "{\"胸\":[],\"背中\":[],\"肩\":[],\"脚\":[],\"腕\":[]}"
+  }
+}

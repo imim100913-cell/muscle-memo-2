@@ -292,7 +292,7 @@ export default function SettingsView({
                     </span>
                 </div>
                 <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
-                    QRコードを使ってスマホで最新版を今すぐ開いたり、PC⇔スマホ間で設定・トレーニング履歴をワンタップで双方向同期できます。
+                    HTTPSとWeb Locks対応ブラウザで利用してください。設定・履歴はURL・コードまたはJSONバックアップで手動移行できます。この版ではLAN QR接続・自動同期は利用できません。
                 </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -301,7 +301,7 @@ export default function SettingsView({
                         onClick={onOpenMobileSync}
                         className="py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 active:scale-95 shadow-md"
                     >
-                        <QrCode size={15} /> QR接続・スマホ同期を開く
+                        <QrCode size={15} /> スマホへのデータ移行を開く
                     </button>
 
                     <button

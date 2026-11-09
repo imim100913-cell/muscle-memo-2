@@ -1,21 +1,6 @@
 <!doctype html>
 <html lang="ja">
   <head>
-    <script>
-(function(){
-  if (!window.fetch) return;
-  var origFetch = window.fetch.bind(window);
-  window.fetch = function(input, init) {
-    var url = typeof input === 'string' ? input : (input && input.url) || '';
-    if (url.indexOf('__vite_ping') !== -1) {
-      return origFetch(input, init).catch(function() {
-        return new Promise(function() {});
-      });
-    }
-    return origFetch(input, init);
-  };
-})();
-</script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <link rel="apple-touch-icon" href="./coach_all_might.png" />
@@ -31,8 +16,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
     <meta name="description" content="AIトレーナーがあなたの限界突破をサポートする、日本語対応のスマート筋トレ記録アプリ「マッスルメモ 2.0」" />
     <title>マッスルメモ 2.0 - AIフィットネスパートナー</title>
-    <script type="module" crossorigin src="./assets/index-BN8GPFKO.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DnjvX-MB.css">
+    <script type="module" crossorigin src="./assets/index-BRkaD94K.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BksHB-YQ.css">
   </head>
   <body>
     <div id="root"></div>
