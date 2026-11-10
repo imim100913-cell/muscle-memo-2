@@ -1,7 +1,7 @@
-name: P0 data integrity review
+name: App verification
 on:
   pull_request:
-    branches: [work/p0-01-audit-base]
+    branches: [main, work/p0-01-audit-base]
     types: [opened, synchronize, reopened, ready_for_review]
 permissions:
   contents: read
