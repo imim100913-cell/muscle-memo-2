@@ -173,7 +173,7 @@ export async function runSystemDiagnostics(geminiApiKey) {
                         } else {
                             results.localStorageStats.totalFlatSets = parsed.length;
                             const uniqueGroups = new Set(parsed.map(w => {
-                                const date = getLocalDateKey(w.timestamp);
+                                const date = w.date || getLocalDateKey(w.timestamp);
                                 return `${date}_${w.exercise}`;
                             }));
                             results.localStorageStats.totalHorizontalRecords = uniqueGroups.size;
@@ -215,7 +215,10 @@ export async function runSystemDiagnostics(geminiApiKey) {
                             results.databaseIntegrity.partBreakdown[w.part]++;
                         }
                     } else {
-                        if (!w.exercise) results.databaseIntegrity.anomalies.push(`レガシーレコード #${index}: 種目名(exercise)が欠落しています。`);
+                        // 1 set = 1 record format
+                        if (!w.exercise) results.databaseIntegrity.anomalies.push(`レコード #${index}: 種目名(exercise)が欠落しています。`);
+                        if (w.weight === undefined || isNaN(parseFloat(w.weight))) results.databaseIntegrity.anomalies.push(`レコード #${index} (${identifier}): 重量(weight)が不正です。`);
+                        if (w.reps === undefined || isNaN(parseInt(w.reps, 10))) results.databaseIntegrity.anomalies.push(`レコード #${index} (${identifier}): 回数(reps)が不正です。`);
                         if (w.part && results.databaseIntegrity.partBreakdown[w.part] !== undefined) {
                             results.databaseIntegrity.partBreakdown[w.part]++;
                         }

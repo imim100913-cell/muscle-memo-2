@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { cn } from '../../lib/utils';
-import { Dumbbell, Layers, Hash, History, CheckCircle2, Sparkles, Activity, AlertTriangle, Timer, Search, Plus, ArrowRight, X, Volume2, VolumeX, ThumbsUp, Target, XCircle } from 'lucide-react';
+import { Dumbbell, Layers, Hash, History, CheckCircle2, Sparkles, Activity, AlertTriangle, Timer, Search, Plus, ArrowRight, X, Volume2, VolumeX, ThumbsUp, Target, XCircle, FileText } from 'lucide-react';
 import { calculateNextTarget, isCompound, DEFAULT_EXERCISES } from '../../lib/trainingEngine';
 import { triggerHaptic, requestNotificationPermission } from '../../lib/audio';
 
@@ -12,7 +12,9 @@ export default function WorkoutForm({
     customExercises = {}, 
     onAddCustomExercise, 
     workoutState = 'setup', 
-    setWorkoutState 
+    setWorkoutState,
+    memo: controlledMemo,
+    onMemoChange
 }) {
     const [activePart, setActivePart] = useState('胸');
     const [exercise, setExercise] = useState(() => {
@@ -22,11 +24,22 @@ export default function WorkoutForm({
     const [weight, setWeight] = useState('');
     const [reps, setReps] = useState('');
     const [rir, setRir] = useState('');
+    const [localMemo, setLocalMemo] = useState('');
+    const memo = typeof controlledMemo === 'string' ? controlledMemo : localMemo;
+    const memoRef = useRef(memo);
+    useEffect(() => { memoRef.current = memo; }, [memo]);
+    const handleSetMemo = (valOrFn) => {
+        const nextVal = typeof valOrFn === 'function' ? valOrFn(memoRef.current) : valOrFn;
+        if (typeof nextVal !== 'string') return;
+        memoRef.current = nextVal;
+        if (onMemoChange) onMemoChange(nextVal);
+        else setLocalMemo(nextVal);
+    };
     const [interval, setIntervalVal] = useState(() => {
         const presets = DEFAULT_EXERCISES['胸'] || [];
         return presets.length > 0 && isCompound(presets[0].name) ? '180' : '120';
     });
-    const [formScore, setFormScore] = useState('perfect');
+    const [formScore, setFormScore] = useState(null);
 
     // UI Search & Custom inputs
     const [searchQuery, setSearchQuery] = useState('');
@@ -221,9 +234,6 @@ export default function WorkoutForm({
                 setReps(String(lastSet.reps));
             }
         }
-        if (rir === '' && aiTarget?.targetRir !== undefined) {
-            setRir(String(aiTarget.targetRir));
-        }
         if (aiTarget?.interval) {
             setIntervalVal(String(aiTarget.interval));
         }
@@ -238,15 +248,16 @@ export default function WorkoutForm({
             reps, 
             formScore, 
             rir, 
+            memo,
             interval: parseInt(interval, 10) || 120 
         });
-    }, [activePart, exercise, weight, reps, formScore, rir, interval, onUpdate]);
+    }, [activePart, exercise, weight, reps, formScore, rir, memo, interval, onUpdate]);
 
     // Helpers to quickly adjust weight, reps, RIR, and interval
     const adjustWeight = (amount) => {
         triggerHaptic('light');
         const base = lastSet ? parseFloat(lastSet.weight) : 60;
-        const current = parseFloat(weight) || base;
+        const current = weight !== '' && Number.isFinite(Number(weight)) ? Number(weight) : base;
         const next = Math.max(0, current + amount);
         setWeight(next.toString());
     };
@@ -254,14 +265,14 @@ export default function WorkoutForm({
     const adjustReps = (amount) => {
         triggerHaptic('light');
         const base = lastSet ? parseInt(lastSet.reps) : 10;
-        const current = parseInt(reps) || base;
+        const current = reps !== '' && Number.isFinite(Number(reps)) ? Number(reps) : base;
         const next = Math.max(0, current + amount);
         setReps(next.toString());
     };
 
     const adjustRir = (amount) => {
         triggerHaptic('light');
-        const base = lastSet && lastSet.rir !== undefined ? parseInt(lastSet.rir) : 2;
+        const base = lastSet && lastSet.rir != null ? parseInt(lastSet.rir) : 2;
         const current = rir !== '' ? parseInt(rir) : base;
         const next = Math.max(0, Math.min(5, current + amount));
         setRir(next.toString());
@@ -313,7 +324,7 @@ export default function WorkoutForm({
                                 setCustomInput('');
                             }}
                             className={cn(
-                                "px-5 py-2.5 rounded-full text-xs font-extrabold tracking-wide whitespace-nowrap transition-all outline-none",
+                                "min-h-12 px-5 py-2.5 rounded-full text-xs font-extrabold tracking-wide whitespace-nowrap transition-all outline-none",
                                 activePart === part
                                     ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20"
                                     : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -510,7 +521,7 @@ export default function WorkoutForm({
 
                 {/* Session Start Trigger - Floating/Sticky above bottom navigation bar */}
                 {exercise && (
-                    <div className="fixed bottom-24 left-0 right-0 z-40 flex justify-center pointer-events-none animate-slide-up">
+                    <div className="session-start-bar fixed left-0 right-0 z-40 flex justify-center pointer-events-none animate-slide-up">
                         <div className="w-full max-w-[480px] px-4 pointer-events-auto">
                             <div className="p-3.5 bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl shadow-xl space-y-2">
                                 {lastSet && (
@@ -522,7 +533,7 @@ export default function WorkoutForm({
                                 <button
                                     type="button"
                                     onClick={handleStartSession}
-                                    className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all text-xs flex items-center justify-center gap-2 tracking-wider relative overflow-hidden group outline-none"
+                                    className="w-full min-h-12 py-3.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all text-xs flex items-center justify-center gap-2 tracking-wider relative overflow-hidden group outline-none"
                                 >
                                     <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out" />
                                     <ArrowRight size={14} className="animate-pulse relative z-10" />
@@ -540,7 +551,7 @@ export default function WorkoutForm({
     // = RENDER: SCREEN B - Active Workouts Log =
     // ==========================================
     return (
-        <div className="w-full space-y-6 animate-fade-in">
+        <div className="workout-form-active w-full min-w-0 space-y-6 animate-fade-in">
             {/* Header / Selector details */}
             <div className="flex items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <div className="min-w-0">
@@ -555,7 +566,7 @@ export default function WorkoutForm({
                 <button
                     type="button"
                     onClick={() => setWorkoutState('setup')}
-                    className="text-slate-500 hover:text-slate-800 transition-colors border border-slate-200 px-2.5 py-1.5 rounded-lg bg-slate-50 text-[10px] font-bold active:scale-95 flex items-center gap-1 outline-none"
+                    className="min-h-12 flex-shrink-0 text-slate-500 hover:text-slate-800 transition-colors border border-slate-200 px-2.5 py-1.5 rounded-lg bg-slate-50 text-[10px] font-bold active:scale-95 flex items-center gap-1 outline-none"
                 >
                     <X size={12} /> 種目を変更
                 </button>
@@ -651,65 +662,81 @@ export default function WorkoutForm({
             </div>
 
             {/* Weight, Reps, RIR & Interval Grid */}
-            <div className="grid grid-cols-2 gap-2 sm:gap-4">
-                <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
-                    <label className="text-[10px] sm:text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block flex items-center gap-1.5 truncate">
+            <div className="workout-input-grid grid grid-cols-2 gap-3 sm:gap-4">
+                <div className="min-w-0 bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
+                    <label htmlFor="workout-weight" className="text-xs text-slate-500 font-bold tracking-wide mb-1 block flex items-center gap-1.5 truncate">
                         <Layers size={12} className="flex-shrink-0" /> 重量 (kg)
                     </label>
                     <input
+                        id="workout-weight"
                         type="number"
+                        inputMode="decimal"
+                        enterKeyHint="done"
+                        step="any"
+                        min="0"
                         value={weight}
                         onChange={(e) => setWeight(e.target.value)}
                         placeholder={lastSet ? lastSet.weight.toString() : "60"}
-                        className="w-full bg-transparent text-xl sm:text-2xl font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
+                        className="w-full min-w-0 min-h-12 rounded-lg bg-slate-50 px-2 text-2xl focus:ring-2 focus:ring-blue-500 font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
                     />
                     <div className="flex gap-0.5 sm:gap-1 mt-2.5">
                         {[-2.5, 2.5].map((val) => (
                             <button
                                 key={val}
                                 type="button"
+                                aria-label={`重量を${val > 0 ? "増やす" : "減らす"} ${Math.abs(val)}kg`}
                                 onClick={() => adjustWeight(val)}
-                                className="flex-1 py-1 rounded bg-slate-50 border border-slate-200 text-[9px] sm:text-[10px] text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
+                                className="flex-1 min-h-12 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
                             >
                                 {val > 0 ? `+${val}` : val}
                             </button>
                         ))}
                     </div>
                 </div>
-                <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
-                    <label className="text-[10px] sm:text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block flex items-center gap-1.5 truncate">
+                <div className="min-w-0 bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
+                    <label htmlFor="workout-reps" className="text-xs text-slate-500 font-bold tracking-wide mb-1 block flex items-center gap-1.5 truncate">
                         <Hash size={12} className="flex-shrink-0" /> 回数 (Reps)
                     </label>
                     <input
+                        id="workout-reps"
                         type="number"
+                        inputMode="numeric"
+                        enterKeyHint="done"
+                        step="1"
+                        min="0"
                         value={reps}
                         onChange={(e) => setReps(e.target.value)}
                         placeholder={lastSet ? lastSet.reps.toString() : "10"}
-                        className="w-full bg-transparent text-xl sm:text-2xl font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
+                        className="w-full min-w-0 min-h-12 rounded-lg bg-slate-50 px-2 text-2xl focus:ring-2 focus:ring-blue-500 font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
                     />
                     <div className="flex gap-0.5 sm:gap-1 mt-2.5">
                         {[-1, 1].map((val) => (
                             <button
                                 key={val}
                                 type="button"
+                                aria-label={`回数を${val > 0 ? "増やす" : "減らす"}`}
                                 onClick={() => adjustReps(val)}
-                                className="flex-1 py-1 rounded bg-slate-50 border border-slate-200 text-[9px] sm:text-[10px] text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
+                                className="flex-1 min-h-12 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
                             >
                                 {val > 0 ? `+${val}` : val}
                             </button>
                         ))}
                     </div>
                 </div>
-                <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
-                    <label className="text-[10px] sm:text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block flex items-center gap-1.5 truncate">
+                <div className="min-w-0 bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
+                    <label htmlFor="workout-rir" className="text-xs text-slate-500 font-bold tracking-wide mb-1 block flex items-center gap-1.5 truncate">
                         <Target size={12} className="flex-shrink-0" /> 余力 (RIR)
                     </label>
                     <input
+                        id="workout-rir"
                         type="number"
+                        inputMode="numeric"
+                        enterKeyHint="done"
+                        step="1"
                         value={rir}
                         onChange={(e) => setRir(e.target.value)}
-                        placeholder={lastSet && lastSet.rir !== undefined ? lastSet.rir.toString() : "2"}
-                        className="w-full bg-transparent text-xl sm:text-2xl font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
+                        placeholder={lastSet && lastSet.rir != null ? lastSet.rir.toString() : "2"}
+                        className="w-full min-w-0 min-h-12 rounded-lg bg-slate-50 px-2 text-2xl focus:ring-2 focus:ring-blue-500 font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
                         min="0"
                         max="5"
                     />
@@ -718,37 +745,89 @@ export default function WorkoutForm({
                             <button
                                 key={val}
                                 type="button"
+                                aria-label={`RIRを${val > 0 ? "増やす" : "減らす"}`}
                                 onClick={() => adjustRir(val)}
-                                className="flex-1 py-1 rounded bg-slate-50 border border-slate-200 text-[9px] sm:text-[10px] text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
+                                className="flex-1 min-h-12 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
                             >
                                 {val > 0 ? `+${val}` : val}
                             </button>
                         ))}
                     </div>
                 </div>
-                <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
-                    <label className="text-[10px] sm:text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block flex items-center gap-1.5 truncate">
+                <div className="min-w-0 bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm">
+                    <label htmlFor="workout-interval" className="text-xs text-slate-500 font-bold tracking-wide mb-1 block flex items-center gap-1.5 truncate">
                         <Timer size={12} className="flex-shrink-0" /> インターバル (秒)
                     </label>
                     <input
+                        id="workout-interval"
                         type="number"
+                        inputMode="numeric"
+                        enterKeyHint="done"
+                        step="1"
+                        min="0"
                         value={interval}
                         onChange={(e) => setIntervalVal(e.target.value)}
                         placeholder="120"
-                        className="w-full bg-transparent text-xl sm:text-2xl font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
+                        className="w-full min-w-0 min-h-12 rounded-lg bg-slate-50 px-2 text-2xl focus:ring-2 focus:ring-blue-500 font-black text-slate-800 placeholder:text-slate-400 outline-none font-mono"
                     />
                     <div className="flex gap-0.5 sm:gap-1 mt-2.5">
                         {[-30, 30].map((val) => (
                             <button
                                 key={val}
                                 type="button"
+                                aria-label={`インターバルを${val > 0 ? "増やす" : "減らす"} 30秒`}
                                 onClick={() => adjustInterval(val)}
-                                className="flex-1 py-1 rounded bg-slate-50 border border-slate-200 text-[9px] sm:text-[10px] text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
+                                className="flex-1 min-h-12 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700 font-extrabold hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all outline-none"
                             >
                                 {val > 0 ? `+${val}s` : `${val}s`}
                             </button>
                         ))}
                     </div>
+                </div>
+            </div>
+
+            {/* Free Memo / Set Note Input */}
+            <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                    <label className="text-[10px] sm:text-xs text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                        <FileText size={12} className="text-blue-600 flex-shrink-0" /> セット別 自由メモ (Memo)
+                    </label>
+                    <span className="text-[9px] text-slate-400 font-medium">RIRとセットで保存</span>
+                </div>
+                <div className="relative">
+                    <input
+                        type="text"
+                        value={memo}
+                        onChange={(e) => handleSetMemo(e.target.value)}
+                        placeholder="例: フォーム意識、トップで1秒静止、肘違和感なし..."
+                        className="w-full min-h-12 bg-slate-50 border border-slate-200 text-base text-slate-800 rounded-xl px-3 py-2.5 pr-12 outline-none focus:bg-white focus:border-blue-500 transition-colors font-medium placeholder:text-slate-400"
+                        maxLength={120}
+                    />
+                    {memo && (
+                        <button
+                            type="button"
+                            onClick={() => handleSetMemo('')}
+                            className="absolute right-0 top-1/2 -translate-y-1/2 min-w-12 min-h-12 flex items-center justify-center text-slate-400 hover:text-slate-600"
+                            title="メモをクリア"
+                        >
+                            <X size={13} />
+                        </button>
+                    )}
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {['フォーム重視', 'ドロップセット', '限界突破', 'ネガティブ意識', '軽め調整'].map((tag) => (
+                        <button
+                            key={tag}
+                            type="button"
+                            onClick={() => {
+                                triggerHaptic('light');
+                                handleSetMemo(prev => prev ? `${prev} / ${tag}` : tag);
+                            }}
+                            className="min-h-11 text-xs px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold transition-colors active:scale-95 outline-none"
+                        >
+                            +{tag}
+                        </button>
+                    ))}
                 </div>
             </div>
 
@@ -766,7 +845,7 @@ export default function WorkoutForm({
                         <button
                             key={item.value}
                             type="button"
-                            onClick={() => setFormScore(item.value)}
+                            onClick={() => setFormScore(formScore === item.value ? null : item.value)}
                             className={cn(
                                 "flex flex-col items-center justify-center p-2.5 rounded-xl border text-center transition-all active:scale-95 outline-none",
                                 formScore === item.value
@@ -799,15 +878,23 @@ export default function WorkoutForm({
                         <CheckCircle2 size={12} />
                         本日の記録 ({todaySessionLogs.length}セット完了)
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
                         {todaySessionLogs.map((log, index) => (
-                            <div key={log.id} className="flex justify-between text-xs text-slate-600 border-b border-slate-100 pb-1 last:border-0">
-                                <span className="opacity-50">セット {index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
-                                <span>
-                                    <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
-                                    <span className="text-slate-400 text-[10px] ml-1.5">(RIR {log.rir !== undefined ? log.rir : '−'})</span>
-                                    {log.isPR && <span className="text-[10px] text-yellow-600 font-bold ml-1.5">★PR</span>}
-                                </span>
+                            <div key={log.id} className="text-xs text-slate-600 border-b border-slate-100 pb-1.5 last:border-0 space-y-1">
+                                <div className="flex justify-between items-center">
+                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : log.formScore === 'fail' ? 'Fail' : '未評価'})</span>
+                                    <span>
+                                        <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
+                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir != null ? log.rir : '−'}</span>
+                                        {log.isPR && <span className="text-[10px] text-yellow-600 font-bold ml-1.5">★PR</span>}
+                                    </span>
+                                </div>
+                                {log.memo && (
+                                    <div className="text-[10px] text-slate-600 bg-white/90 border border-slate-200/80 rounded-md px-2 py-0.5 w-fit flex items-center gap-1 font-medium">
+                                        <span className="text-blue-500 font-bold">💬</span>
+                                        <span>{log.memo}</span>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -821,14 +908,22 @@ export default function WorkoutForm({
                         <History size={12} />
                         前回の記録 ({new Date(previousSessionLogs[0].timestamp).toLocaleDateString("ja-JP")})
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
                         {previousSessionLogs.map((log, index) => (
-                            <div key={log.id} className="flex justify-between text-xs text-slate-600 border-b border-slate-100 pb-1 last:border-0">
-                                <span className="opacity-50">セット {index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : 'Fail'})</span>
-                                <span>
-                                    <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
-                                    <span className="text-slate-400 text-[10px] ml-1.5">(RIR {log.rir !== undefined ? log.rir : '−'})</span>
-                                </span>
+                            <div key={log.id} className="text-xs text-slate-600 border-b border-slate-100 pb-1.5 last:border-0 space-y-1">
+                                <div className="flex justify-between items-center">
+                                    <span className="opacity-60 font-medium">セット {log.setNum || index + 1} ({log.formScore === 'perfect' ? 'Perfect' : log.formScore === 'good' ? 'Good' : log.formScore === 'fail' ? 'Fail' : '未評価'})</span>
+                                    <span>
+                                        <span className="font-bold text-slate-800">{log.weight}kg</span> x {log.reps}回
+                                        <span className="text-blue-600 font-bold text-[10px] ml-1.5 font-mono">RIR {log.rir != null ? log.rir : '−'}</span>
+                                    </span>
+                                </div>
+                                {log.memo && (
+                                    <div className="text-[10px] text-slate-600 bg-white/90 border border-slate-200/80 rounded-md px-2 py-0.5 w-fit flex items-center gap-1 font-medium">
+                                        <span className="text-blue-500 font-bold">💬</span>
+                                        <span>{log.memo}</span>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>

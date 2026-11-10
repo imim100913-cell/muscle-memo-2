@@ -29,3 +29,7 @@ muscle-memo-android/.idea/
 *.njsproj
 *.sln
 *.sw?
+
+# Browser test artifacts (synthetic data only)
+test-results/
+playwright-report/

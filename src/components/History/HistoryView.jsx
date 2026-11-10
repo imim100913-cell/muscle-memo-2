@@ -92,31 +92,39 @@ export default function HistoryView({ workouts }) {
                         {/* Sets list */}
                         <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
                             {session.sets.map((set, idx) => (
-                                <div key={set.id} className="flex items-center justify-between text-xs font-semibold text-slate-700 bg-slate-50/50 p-2 rounded-xl border border-slate-200/60 hover:bg-slate-100/50 transition-colors">
-                                    <div className="flex items-center gap-2">
-                                        <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-[9px]">{idx + 1}</span>
-                                        <span className="font-bold text-blue-600">{set.weight} <span className="text-[9px] font-normal text-slate-400">kg</span></span>
-                                        <span className="text-slate-400">x</span>
-                                        <span className="font-bold text-indigo-600">{set.reps} <span className="text-[9px] font-normal text-slate-400">reps</span></span>
+                                <div key={set.id} className="text-xs font-semibold text-slate-700 bg-slate-50/50 p-2 rounded-xl border border-slate-200/60 hover:bg-slate-100/50 transition-colors space-y-1">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-[9px]">{set.setNum || idx + 1}</span>
+                                            <span className="font-bold text-blue-600">{set.weight} <span className="text-[9px] font-normal text-slate-400">kg</span></span>
+                                            <span className="text-slate-400">x</span>
+                                            <span className="font-bold text-indigo-600">{set.reps} <span className="text-[9px] font-normal text-slate-400">reps</span></span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] text-slate-600 font-mono bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">RIR {set.rir ?? '未入力'}</span>
+                                            {set.interval !== undefined && (
+                                                <span className="text-[10px] text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">{set.interval}秒</span>
+                                            )}
+                                            {set.formScore && (
+                                                <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                                    set.formScore === 'perfect' ? 'bg-green-50 text-green-700 border border-green-200' :
+                                                    set.formScore === 'good' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                                                    'bg-red-50 text-red-700 border border-red-200'
+                                                }`}>
+                                                    {set.formScore === 'perfect' ? <CheckCircle2 size={9} /> :
+                                                     set.formScore === 'good' ? <ThumbsUp size={9} /> :
+                                                     <XCircle size={9} />}
+                                                    {set.formScore === 'perfect' ? 'Perfect' : set.formScore === 'good' ? 'Good' : 'Fail'}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
-                                    <div className="flex items-center gap-2.5">
-                                        <span className="text-[10px] text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">RIR {set.rir}</span>
-                                        {set.interval !== undefined && (
-                                            <span className="text-[10px] text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">{set.interval}秒</span>
-                                        )}
-                                        {set.formScore && (
-                                            <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                                                set.formScore === 'perfect' ? 'bg-green-50 text-green-700 border border-green-200' :
-                                                set.formScore === 'good' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
-                                                'bg-red-50 text-red-700 border border-red-200'
-                                            }`}>
-                                                {set.formScore === 'perfect' ? <CheckCircle2 size={9} /> :
-                                                 set.formScore === 'good' ? <ThumbsUp size={9} /> :
-                                                 <XCircle size={9} />}
-                                                {set.formScore === 'perfect' ? 'Perfect' : set.formScore === 'good' ? 'Good' : 'Fail'}
-                                            </span>
-                                        )}
-                                    </div>
+                                    {set.memo && (
+                                        <div className="text-[10px] text-slate-600 bg-white/90 border border-slate-200/80 rounded-md px-2 py-0.5 w-fit flex items-center gap-1 font-medium ml-7">
+                                            <span className="text-blue-500 font-bold">💬</span>
+                                            <span>{set.memo}</span>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>

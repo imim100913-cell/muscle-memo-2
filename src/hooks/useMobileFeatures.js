@@ -13,7 +13,8 @@ export function useMobileFeatures({ autoWakeLock = false } = {}) {
     () => typeof navigator !== 'undefined' && 'wakeLock' in navigator
   );
   const [isWakeLockEnabled, setIsWakeLockEnabled] = useState(() => {
-    return localStorage.getItem('muscle-memo-wakelock') !== 'off';
+    try { return localStorage.getItem('muscle-memo-wakelock') !== 'off'; }
+    catch { return false; }
   });
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
@@ -131,13 +132,15 @@ export function useMobileFeatures({ autoWakeLock = false } = {}) {
   // --- 3. Service Worker & Instant Update Detection ---
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const swRegistrationRef = useRef(null);
+  const updateRequestedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
 
     let refreshing = false;
     const handleControllerChange = () => {
-      if (refreshing) return;
+      // First installation and updates in another tab must never discard a draft.
+      if (refreshing || !updateRequestedRef.current) return;
       refreshing = true;
       window.location.reload();
     };
@@ -179,6 +182,7 @@ export function useMobileFeatures({ autoWakeLock = false } = {}) {
   }, []);
 
   const applyUpdate = useCallback(() => {
+    updateRequestedRef.current = true;
     const reg = swRegistrationRef.current;
     if (reg && reg.waiting) {
       reg.waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -189,18 +193,20 @@ export function useMobileFeatures({ autoWakeLock = false } = {}) {
 
   const checkForLatestVersion = useCallback(async () => {
     const reg = swRegistrationRef.current;
-    if (reg) {
-      try {
-        await reg.update();
-        if (reg.waiting) {
-          setUpdateAvailable(true);
-          return 'update_found';
-        }
-      } catch {
-        // Ignore
+    if (!reg) return 'unavailable';
+    if (!navigator.onLine) return 'check_failed';
+    try {
+      await reg.update();
+      if (reg.waiting) {
+        setUpdateAvailable(true);
+        return 'update_found';
       }
+      // update() can resolve while the new worker is still installing.
+      // The statechange listener will expose the update once its shell is ready.
+      return reg.installing ? 'checking' : 'up_to_date';
+    } catch {
+      return 'check_failed';
     }
-    return 'up_to_date';
   }, []);
 
   return {

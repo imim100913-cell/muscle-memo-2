@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import { Dumbbell, CheckCircle2, Smartphone, Sun, RefreshCw, Download } from 'lucide-react';
 
@@ -10,12 +10,15 @@ import HistoryView from './components/History/HistoryView';
 import SettingsView from './components/Settings/SettingsView';
 import Onboarding from './components/Onboarding/Onboarding';
 import MobileSyncModal from './components/Mobile/MobileSyncModal';
+import { RESET_BACKUP_KEY } from './lib/persistence.js';
+import { decodeStoredValue } from './lib/storageSchema.js';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useMobileFeatures } from './hooks/useMobileFeatures';
-import { calculate1RM, getLocalDateKey } from './lib/utils';
+import { calculate1RM, getLocalDateKey, createUniqueId } from './lib/utils';
+import { migrateToFlatWorkouts, normalizeSingleSet } from './lib/workoutMigration.js';
 import { GeminiService, parseGeminiError, DEFAULT_GEMINI_MODEL } from './services/gemini';
 import { playBeep, unlockAudio, triggerHaptic, sendTimerNotification } from './lib/audio';
-import { pullSyncSnapshotFromServer, decodeSyncToken, applySyncedData } from './services/mobileSync';
+import { decodeSyncToken, applySyncedData } from './services/mobileSync';
 
 // Local Fallback AI Triggers per Coach
 const LOCAL_COACH_TRIGGERS = {
@@ -64,143 +67,21 @@ const LOCAL_COACH_TRIGGERS = {
     }
   }
 };
-// --- Horizontal Workout Data Migration & Mapping Helpers ---
-function migrateWorkoutsToHorizontal(legacyWorkouts) {
-  if (!Array.isArray(legacyWorkouts)) return [];
-  const isHorizontal = legacyWorkouts.some(w => w.set1_weight !== undefined);
-  if (isHorizontal) {
-    return legacyWorkouts;
-  }
-
-  const groups = {};
-  legacyWorkouts.forEach(w => {
-    const date = getLocalDateKey(w.timestamp);
-    const key = `${date}_${w.exercise}`;
-    if (!groups[key]) {
-      groups[key] = [];
-    }
-    groups[key].push(w);
-  });
-
-  const horizontalList = [];
-  Object.keys(groups).forEach(key => {
-    const sets = groups[key].sort((a, b) => a.timestamp - b.timestamp);
-    const firstSet = sets[0];
-    const record = {
-      id: firstSet.id || (Date.now().toString(36) + Math.random().toString(36).substr(2)),
-      date: getLocalDateKey(firstSet.timestamp),
-      timestamp: firstSet.timestamp,
-      part: firstSet.part,
-      exercise: firstSet.exercise
-    };
-
-    sets.forEach((set, index) => {
-      const setNum = index + 1;
-      if (setNum <= 30) {
-        record[`set${setNum}_weight`] = set.weight;
-        record[`set${setNum}_reps`] = set.reps;
-        record[`set${setNum}_rir`] = set.rir !== undefined ? set.rir : 2;
-        record[`set${setNum}_form`] = set.formScore || 'perfect';
-        record[`set${setNum}_interval`] = set.interval !== undefined ? set.interval : 120;
-      }
-    });
-
-    horizontalList.push(record);
-  });
-
-  return horizontalList.sort((a, b) => a.timestamp - b.timestamp);
-}
-
-function flatMapWorkouts(horizontalWorkouts) {
-  if (!Array.isArray(horizontalWorkouts)) return [];
-  
-  const flatSets = [];
-  horizontalWorkouts.forEach(record => {
-    for (let i = 1; i <= 30; i++) {
-      const wKey = `set${i}_weight`;
-      const rKey = `set${i}_reps`;
-      const rirKey = `set${i}_rir`;
-      const fKey = `set${i}_form`;
-      const intKey = `set${i}_interval`;
-      
-      if (record[wKey] !== undefined && record[wKey] !== null && record[wKey] !== '') {
-        const weight = parseFloat(record[wKey]);
-        const reps = parseInt(record[rKey], 10);
-        const rir = record[rirKey] !== undefined && record[rirKey] !== '' ? parseInt(record[rirKey], 10) : 2;
-        const formScore = record[fKey] || 'perfect';
-        const interval = record[intKey] !== undefined && record[intKey] !== '' ? parseInt(record[intKey], 10) : 120;
-        const oneRM = calculate1RM(weight, reps);
-        
-        flatSets.push({
-          id: `${record.id || record.timestamp}-${i}`,
-          timestamp: (record.timestamp || Date.now()) + i * 1000,
-          part: record.part,
-          exercise: record.exercise,
-          weight,
-          reps,
-          rir,
-          formScore,
-          interval,
-          oneRM,
-          isPR: false
-        });
-      }
-    }
-  });
-  
-  flatSets.sort((a, b) => a.timestamp - b.timestamp);
-  
-  const max1RMs = {};
-  flatSets.forEach(set => {
-    const ex = set.exercise;
-    const currentMax = max1RMs[ex] || 0;
-    if (set.oneRM > currentMax) {
-      set.isPR = true;
-      max1RMs[ex] = set.oneRM;
-    } else {
-      set.isPR = false;
-    }
-  });
-  
-  return flatSets;
-}
 
 function App() {
-  // --- Persistent State ---
-  const [rawWorkouts, setRawWorkouts] = useLocalStorage('muscle-memo-workouts', []);
+  // --- Persistent State (1 Set = 1 Record Unified Format) ---
+  const [rawWorkouts, setRawWorkouts, storageError] = useLocalStorage('muscle-memo-workouts', []);
 
-  // Migrate legacy data if any
-  const migratedWorkouts = useMemo(() => {
-    return migrateWorkoutsToHorizontal(rawWorkouts);
+  const ledger = useMemo(() => {
+    try { return { workouts: migrateToFlatWorkouts(rawWorkouts), error: null }; }
+    catch { return { workouts: [], error: '記録データの検証に失敗しました。原本を保護するため記録・移行を停止しています。設定から原本を退避してください。' }; }
   }, [rawWorkouts]);
-
-  // Derived flat workouts list for backward compatibility
-  const workouts = useMemo(() => {
-    return flatMapWorkouts(migratedWorkouts);
-  }, [migratedWorkouts]);
-
-  // Custom setter wrapper to automatically migrate on external sets (onboarding / clear)
-  const setWorkouts = (newWorkouts) => {
-    if (typeof newWorkouts === 'function') {
-      setRawWorkouts(prev => {
-        const resolved = newWorkouts(prev);
-        return migrateWorkoutsToHorizontal(resolved);
-      });
-    } else {
-      setRawWorkouts(migrateWorkoutsToHorizontal(newWorkouts));
-    }
-  };
-
-  // Automatically persist migrated horizontal workouts if legacy data was found in storage
-  useEffect(() => {
-    if (rawWorkouts && rawWorkouts.length > 0) {
-      const isHorizontal = rawWorkouts.some(w => w.set1_weight !== undefined);
-      if (!isHorizontal) {
-        console.log("Legacy flat workouts detected in storage. Upgrading to horizontal format permanently...");
-        setRawWorkouts(migratedWorkouts);
-      }
-    }
-  }, [rawWorkouts, migratedWorkouts, setRawWorkouts]);
+  const workouts = ledger.workouts;
+  const sessionIdRef = useRef(null);
+  const changeWorkoutState = useCallback(next => {
+    if (next === 'active') sessionIdRef.current = createUniqueId();
+    setWorkoutState(next);
+  }, []);
 
   const [userName, setUserName] = useLocalStorage('muscle-memo-user', 'トレーニー');
   const [apiKey, setApiKey] = useLocalStorage('muscle-memo-gemini-key', '');
@@ -217,14 +98,24 @@ function App() {
 
   // --- Local State ---
   const [activeTab, setActiveTab] = useState('home');
-  const [currentEntry, setCurrentEntry] = useState({ part: '胸', exercise: '', weight: '', reps: '', rir: '2', formScore: 'perfect', interval: 120 });
+  const [currentEntry, setCurrentEntry] = useState({ 
+    part: '胸', 
+    exercise: '', 
+    weight: '', 
+    reps: '', 
+    rir: '',
+    memo: '', 
+    formScore: null,
+    interval: 120 
+  });
+  const lastSavedEntryRef = useRef(null);
   const [feedbackMsg, setFeedbackMsg] = useState(null);
   const [workoutState, setWorkoutState] = useState('setup');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
   const [restTimer, setRestTimer] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(() => new URLSearchParams(window.location.search).get('sync') === 'lan');
   const [incomingSyncOffer, setIncomingSyncOffer] = useState(null);
 
   // --- Mobile & PWA Capabilities ---
@@ -255,12 +146,13 @@ function App() {
     }
   }, [isChatOpen]);
 
-  // Detect incoming QR / Portable URL sync on launch (?sync=lan or #sync=...)
+  // Only portable tokens can offer incoming data. Legacy ?sync=lan opens help.
   useEffect(() => {
     let cancelled = false;
+    let sequence = 0;
     const detectIncomingSync = async () => {
+      const request = ++sequence;
       await Promise.resolve();
-      const params = new URLSearchParams(window.location.search);
       const hash = window.location.hash || '';
 
       // 1. Portable compressed URL (#sync=...)
@@ -268,7 +160,7 @@ function App() {
         try {
           const token = hash.split('sync=')[1].split('&')[0];
           const decoded = await decodeSyncToken(token);
-          if (!cancelled && decoded?.d) {
+          if (!cancelled && request === sequence && decoded?.d) {
             setIncomingSyncOffer({
               type: 'url',
               source: '共有URLリンク',
@@ -281,43 +173,31 @@ function App() {
         }
         return;
       }
-
-      // 2. Local Wi-Fi QR Code scan (?sync=lan)
-      if (params.get('sync') === 'lan') {
-        try {
-          const res = await pullSyncSnapshotFromServer();
-          if (!cancelled && res?.snapshot?.data) {
-            setIncomingSyncOffer({
-              type: 'lan',
-              source: res.snapshot.sourceDevice || 'PC',
-              data: res.snapshot.data
-            });
-            window.history.replaceState(null, '', window.location.pathname);
-          }
-        } catch {
-          // Ignore if bridge not reachable
-        }
-      }
     };
     detectIncomingSync();
+    window.addEventListener('hashchange', detectIncomingSync);
     return () => {
       cancelled = true;
+      window.removeEventListener('hashchange', detectIncomingSync);
     };
   }, []);
 
   const handleAcceptIncomingSync = () => {
     if (!incomingSyncOffer?.data) return;
-    triggerHaptic('success');
-    applySyncedData(incomingSyncOffer.data, 'merge');
-    setIncomingSyncOffer(null);
-    window.location.reload();
+    try {
+      applySyncedData(incomingSyncOffer.data, 'merge');
+      triggerHaptic('success');
+      setIncomingSyncOffer(null);
+      window.location.reload();
+    } catch (error) { window.alert(error.message); }
   };
 
   const handleSaveSettings = (newName, newApiKey, newCoach, newModel) => {
-    setUserName(newName);
-    setApiKey(newApiKey);
-    setCoachType(newCoach);
-    if (newModel) setGeminiModel(newModel);
+    const results = [setUserName(newName), setApiKey(newApiKey), setCoachType(newCoach)];
+    if (newModel) results.push(setGeminiModel(newModel));
+    const failure = results.find(result => !result.success);
+    if (failure) window.alert(failure.error);
+    return failure || { success: true };
   };
 
   const handleAddCustomExercise = (part, name, category) => {
@@ -382,10 +262,10 @@ function App() {
       .sort((a, b) => a.timestamp - b.timestamp);
       
     // Today's sets in this session
-    const todaySets = exerciseHistory.filter(w => new Date(w.timestamp).toDateString() === todayStr);
+    const todaySets = exerciseHistory.filter(w => new Date(w.timestamp).toDateString() === todayStr && w.sessionId === sessionIdRef.current);
     
     // Past sessions (excluding today)
-    const pastSets = exerciseHistory.filter(w => new Date(w.timestamp).toDateString() !== todayStr);
+    const pastSets = exerciseHistory.filter(w => w.sessionId !== sessionIdRef.current);
     
     // Find last session date & logs
     let lastSessionDate = "なし";
@@ -393,8 +273,8 @@ function App() {
     if (pastSets.length > 0) {
       const lastTimestamp = pastSets[pastSets.length - 1].timestamp;
       lastSessionDate = new Date(lastTimestamp).toLocaleDateString("ja-JP");
-      const lastSessionDayStr = new Date(lastTimestamp).toDateString();
-      lastSessionLogs = pastSets.filter(w => new Date(w.timestamp).toDateString() === lastSessionDayStr);
+      const previousSessionId = pastSets[pastSets.length - 1].sessionId;
+      lastSessionLogs = pastSets.filter(w => w.sessionId === previousSessionId);
     }
 
     // Max 1RM achieved
@@ -404,12 +284,32 @@ function App() {
       userProfile: { name: userName, coachType },
       currentExercise: exerciseName,
       todaySession: {
+        sessionId: sessionIdRef.current,
         completedSetsCount: todaySets.length,
-        sets: todaySets.map((s, idx) => ({ setNum: idx + 1, weight: s.weight, reps: s.reps, rir: s.rir !== undefined ? s.rir : 2, oneRM: s.oneRM, isPR: s.isPR, formScore: s.formScore }))
+        sets: todaySets.map((s, idx) => ({ 
+          id: s.id, sessionId: s.sessionId,
+          setNum: s.setNum || (idx + 1), 
+          weight: s.weight, 
+          reps: s.reps, 
+          rir: s.rir ?? null,
+          memo: s.memo || '',
+          oneRM: s.oneRM, 
+          isPR: s.isPR, 
+          formScore: s.formScore 
+        }))
       },
       previousSession: {
         date: lastSessionDate,
-        sets: lastSessionLogs.map((s, idx) => ({ setNum: idx + 1, weight: s.weight, reps: s.reps, rir: s.rir !== undefined ? s.rir : 2, oneRM: s.oneRM, formScore: s.formScore }))
+        sets: lastSessionLogs.map((s, idx) => ({ 
+          id: s.id, sessionId: s.sessionId,
+          setNum: s.setNum || (idx + 1), 
+          weight: s.weight, 
+          reps: s.reps, 
+          rir: s.rir ?? null,
+          memo: s.memo || '',
+          oneRM: s.oneRM, 
+          formScore: s.formScore 
+        }))
       },
       statistics: {
         allTimeMax1RM: max1RM > 0 ? `${max1RM}kg` : "記録なし",
@@ -510,7 +410,7 @@ function App() {
         setMessages(prev => [...prev, aiMsg]);
         if (!isChatOpenRef.current) setHasUnread(true);
       } catch (e) {
-        console.error(e);
+        console.error('AI request failed');
         const parsedError = parseGeminiError(e);
         
         let coachIntro = "";
@@ -570,8 +470,18 @@ function App() {
   };
 
   // --- App Logic ---
-  const handleFormUpdate = (data) => {
-    setCurrentEntry(data);
+  const handleFormUpdate = useCallback((data) => {
+    setCurrentEntry(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data);
+  }, []);
+
+  const handleApplyUpdate = () => {
+    const hasInput = ['weight', 'reps', 'rir', 'memo', 'formScore'].some(key =>
+      currentEntry[key] !== '' && currentEntry[key] != null
+    );
+    const hasUnsavedInput = hasInput && (!lastSavedEntryRef.current ||
+      Object.keys(currentEntry).some(key => currentEntry[key] !== lastSavedEntryRef.current[key]));
+    if (hasUnsavedInput && !window.confirm('更新すると入力中のセット内容は消えます。先に記録する場合はキャンセルしてください。今すぐ更新しますか？')) return;
+    applyUpdate();
   };
 
   // Trigger from WorkoutForm (Advice / Exercise changed)
@@ -593,75 +503,76 @@ function App() {
   };
 
   const handleRecord = () => {
-    const { exercise, weight, reps, rir, interval } = currentEntry;
+    if (ledger.error) { showFeedback(ledger.error); return; }
+    const { exercise, weight, reps, rir, memo, interval } = currentEntry;
     if (!exercise) {
       showFeedback("⚠️ 種目を選択してください！");
       return;
     }
-    const w = parseFloat(weight);
-    const r = parseFloat(reps);
-    if (!weight || !reps || isNaN(w) || isNaN(r) || w <= 0 || r <= 0) {
+    const w = Number(weight);
+    const r = Number(reps);
+    if (!weight || !reps || !Number.isFinite(w) || !Number.isSafeInteger(r) || w <= 0 || r <= 0) {
       showFeedback("⚠️ 重量と回数を入力してください！");
       return;
     }
 
-    const rirVal = rir !== '' && rir !== undefined ? parseInt(rir, 10) : 2;
+    const rirVal = rir !== '' && rir != null ? Number(rir) : null;
+    const memoVal = typeof memo === 'string' ? memo.trim() : '';
     const intervalVal = interval !== undefined && interval !== '' ? parseInt(interval, 10) : 120;
     const oneRM = calculate1RM(w, r);
     const timestamp = Date.now();
     const dateKey = getLocalDateKey(timestamp);
 
-    const updatedHorizontal = [...migratedWorkouts];
-    const existingIndex = updatedHorizontal.findIndex(rec => rec.date === dateKey && rec.exercise === exercise);
-
-    let isPRVal = false;
-    if (existingIndex >= 0) {
-      const record = { ...updatedHorizontal[existingIndex] };
-      let slotFound = false;
-      for (let i = 1; i <= 30; i++) {
-        if (record[`set${i}_weight`] === undefined || record[`set${i}_weight`] === null || record[`set${i}_weight`] === '') {
-          record[`set${i}_weight`] = w;
-          record[`set${i}_reps`] = r;
-          record[`set${i}_rir`] = rirVal;
-          record[`set${i}_form`] = currentEntry.formScore || 'perfect';
-          record[`set${i}_interval`] = intervalVal;
-          slotFound = true;
-          break;
-        }
-      }
-      if (!slotFound) {
-        alert("本日のこの種目のセット数が上限（30セット）に達しています。");
-        return;
-      }
-      updatedHorizontal[existingIndex] = record;
-    } else {
-      const newRecord = {
-        id: Date.now().toString(36) + Math.random().toString(36).substr(2),
-        date: dateKey,
-        timestamp,
-        part: currentEntry.part,
-        exercise,
-        set1_weight: w,
-        set1_reps: r,
-        set1_rir: rirVal,
-        set1_form: currentEntry.formScore || 'perfect',
-        set1_interval: intervalVal
-      };
-      updatedHorizontal.push(newRecord);
+    // Number sets independently within this session and exercise
+    const todaySets = workouts.filter(wItem => wItem.sessionId === sessionIdRef.current && wItem.exercise === exercise);
+    if (todaySets.length >= 30) {
+      alert("このセッションのこの種目のセット数が上限（30セット）に達しています。");
+      return;
     }
+    const setNum = todaySets.length + 1;
 
-    const exerciseHistory = workouts.filter(w => w.exercise === exercise);
+    const exerciseHistory = workouts.filter(wItem => wItem.exercise === exercise);
     const currentMax1RM = exerciseHistory.reduce((max, log) => Math.max(max, log.oneRM || 0), 0);
-    isPRVal = oneRM > currentMax1RM;
+    const isPRVal = oneRM > currentMax1RM;
 
-    setRawWorkouts(updatedHorizontal);
+    // Create a new unified flat record (1 Set = 1 Record)
+    const newRecord = {
+      id: createUniqueId(),
+      sessionId: sessionIdRef.current || (sessionIdRef.current = createUniqueId()),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      date: dateKey,
+      timestamp,
+      part: currentEntry.part,
+      exercise,
+      setNum,
+      weight: w,
+      reps: r,
+      rir: rirVal,
+      memo: memoVal,
+      formScore: currentEntry.formScore ?? null,
+      interval: intervalVal,
+      oneRM,
+      isPR: isPRVal
+    };
+
+    let updatedWorkouts;
+    try { updatedWorkouts = [...workouts, normalizeSingleSet(newRecord)]; }
+    catch { showFeedback('入力値が不正です。記録していません。'); return; }
+    const result = setRawWorkouts(updatedWorkouts);
+    if (!result.success) { showFeedback(result.error); return; }
+
+    // Clear free memo for the next set
+    const nextEntry = { ...currentEntry, memo: '' };
+    lastSavedEntryRef.current = nextEntry;
+    setCurrentEntry(nextEntry);
 
     // Start interval timer automatically on set completion
     if (intervalVal > 0) {
       unlockAudio();
       setRestTimer(intervalVal);
       setIsTimerRunning(true);
-      localStorage.setItem('muscle-memo-timer-endtime', String(Date.now() + intervalVal * 1000));
+      try { localStorage.setItem('muscle-memo-timer-endtime', String(Date.now() + intervalVal * 1000)); } catch { /* Ledger already saved; timer is transient. */ }
     }
 
     // UI & Haptic Feedback
@@ -670,10 +581,12 @@ function App() {
     showFeedback(isPRVal ? "🏆 自己ベスト(PR)更新！インターバル開始" : "記録完了！インターバル開始");
 
     // AI Praise with Rich Context!
-    const updatedFlatWorkouts = flatMapWorkouts(updatedHorizontal);
-    const richContext = buildRichContext(exercise, updatedFlatWorkouts);
+    const richContext = buildRichContext(exercise, updatedWorkouts);
     if (apiKey) {
-      let prompt = `ユーザーが ${exercise} を ${w}kg x ${r}回 (RIR: ${rirVal}) 達成しました。本日のセット数としてはこれで ${updatedFlatWorkouts.filter(w => w.exercise === exercise && new Date(w.timestamp).toDateString() === new Date().toDateString()).length} セット目です。`;
+      let prompt = `ユーザーが ${exercise} を ${w}kg x ${r}回 (RIR: ${rirVal ?? '未入力'}) 達成しました。本日のセット数としてはこれで ${setNum} セット目です。`;
+      if (memoVal) {
+        prompt += ` ユーザーのセット別メモ: 「${memoVal}」`;
+      }
       if (isPRVal) prompt += " これは自己ベスト(PR)更新です！最大限に褒めちぎってください！";
       else prompt += " 今日のこれまでの進捗や前回の記録と比較して、現状のパフォーマンス分析と次のセットに向けた励ましを述べてください。";
       addAiMessage(prompt, richContext);
@@ -692,25 +605,49 @@ function App() {
   };
 
   const clearData = () => {
-    setWorkouts([]);
-    setUserName('トレーニー');
-    setCoachType('all-might');
-    setApiKey('');
-    setGeminiModel(DEFAULT_GEMINI_MODEL);
-    setCustomExercises({
-      "胸": [],
-      "背中": [],
-      "肩": [],
-      "脚": [],
-      "腕": []
+    if (ledger.error) { window.alert(ledger.error); return { success: false }; }
+    let deletedIds;
+    let beforeReset;
+    try {
+      beforeReset = localStorage.getItem('muscle-memo-workouts') ?? '[]';
+      const previous = localStorage.getItem('muscle-memo-deletion-state');
+      deletedIds = previous ? decodeStoredValue('muscle-memo-deletion-state', previous).deletedIds : [];
+    } catch { window.alert('削除情報を読み出せないため、初期化を停止しました。'); return { success: false }; }
+    if (!Array.isArray(deletedIds) || !deletedIds.every(id => typeof id === 'string')) {
+      window.alert('削除情報が不正なため、初期化を停止しました。'); return { success: false };
+    }
+    const result = setRawWorkouts([], {
+      [RESET_BACKUP_KEY]: beforeReset,
+      'muscle-memo-deletion-state': JSON.stringify({ deletedIds: [...new Set([...deletedIds, ...workouts.map(w => w.id)])], deletedAt: Date.now() }),
+      'muscle-memo-user': JSON.stringify('トレーニー'),
+      'muscle-memo-coach': JSON.stringify('all-might'),
+      'muscle-memo-gemini-key': JSON.stringify(''),
+      'muscle-memo-gemini-model': JSON.stringify(DEFAULT_GEMINI_MODEL),
+      'muscle-memo-custom-exercises': JSON.stringify({ 胸: [], 背中: [], 肩: [], 脚: [], 腕: [] }),
+      'muscle-memo-onboarded': JSON.stringify(false)
     });
-    setRestTimer(0);
-    setIsTimerRunning(false);
-    localStorage.removeItem('muscle-memo-timer-endtime');
-    setWorkoutState('setup');
-    setActiveTab('home');
-    setIsOnboarded(false);
+    if (!result.success) { window.alert(result.error); return result; }
+    // Reload all hooks from one committed snapshot; no second storage transaction.
+    try { localStorage.removeItem('muscle-memo-timer-endtime'); } catch { /* transient timer only */ }
+    window.location.reload();
+    return result;
   };
+
+  const mobileSyncModal = (
+    <MobileSyncModal
+      isOpen={isSyncModalOpen}
+      onClose={() => setIsSyncModalOpen(false)}
+      onShowFeedback={showFeedback}
+      canInstallPwa={canInstallPwa}
+      isStandalone={isStandalone}
+      isIos={isIos}
+      onInstallPwa={installPwa}
+    />
+  );
+
+  if (!isOnboarded && storageError) {
+    return <div role="alert" className="p-6 text-red-800">{storageError} ブラウザの保存設定を確認して再読み込みしてください。</div>;
+  }
 
   if (!isOnboarded) {
     return (
@@ -742,13 +679,19 @@ function App() {
             </div>
           </div>
         )}
+        {mobileSyncModal}
         <Onboarding
           onComplete={(data) => {
-            setUserName(data.userName);
-            setApiKey(data.apiKey);
-            setCoachType(data.coachType);
-            setWorkouts(data.workouts || []);
-            setIsOnboarded(true);
+            const results = [setUserName(data.userName), setApiKey(data.apiKey), setCoachType(data.coachType)];
+            if (data.exercisePreferences?.length) {
+              const next = { ...customExercises };
+              for (const ex of data.exercisePreferences) next[ex.part] = [...(next[ex.part] || []), ex];
+              results.push(setCustomExercises(next));
+            }
+            const failure = results.find(result => !result.success);
+            if (failure) { window.alert(failure.error); return; }
+            const result = setIsOnboarded(true);
+            if (!result.success) window.alert(result.error);
           }}
         />
       </>
@@ -758,6 +701,14 @@ function App() {
   return (
     <Layout>
       <main className="flex-1 w-full text-slate-800">
+        {(ledger.error || storageError) && <div role="alert" className="p-4 bg-red-50 text-red-800">
+          {ledger.error || storageError}
+          <button type="button" onClick={() => {
+            const blob = new Blob([JSON.stringify({ entry: currentEntry, original: localStorage.getItem('muscle-memo-workouts') }, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a'); link.href = url; link.download = 'muscle-memo-recovery.json'; link.click(); URL.revokeObjectURL(url);
+          }}>未保存入力と原本を退避</button>
+        </div>}
         {/* Instant New Version Available Banner (PWA Auto-Update) */}
         {updateAvailable && (
           <div className="mx-4 mt-3 p-3 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl text-white text-xs font-bold flex items-center justify-between shadow-md animate-fade-in">
@@ -767,7 +718,7 @@ function App() {
             </div>
             <button
               type="button"
-              onClick={applyUpdate}
+              onClick={handleApplyUpdate}
               className="px-3 py-1 bg-white text-emerald-700 rounded-full text-[11px] font-extrabold shadow-sm active:scale-95 transition-all"
             >
               今すぐ更新
@@ -827,8 +778,8 @@ function App() {
         )}
 
         {/* === TAB A: CHAT & LOG === */}
-        {activeTab === 'home' && (
-          <div className="p-4 pt-6 pb-32 space-y-5">
+        {/* Keep the draft's local fields mounted while another tab is visible. */}
+          <div hidden={activeTab !== 'home'} className="p-4 pt-6 pb-32 space-y-5">
             <header className="flex justify-between items-center gap-2 mb-1">
               <div>
                 <span className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block">Training Session</span>
@@ -882,12 +833,16 @@ function App() {
               customExercises={customExercises}
               onAddCustomExercise={handleAddCustomExercise}
               workoutState={workoutState}
-              setWorkoutState={setWorkoutState}
+              setWorkoutState={changeWorkoutState}
+              memo={currentEntry.memo}
+              onMemoChange={(val) => setCurrentEntry(prev => {
+                const next = typeof val === 'function' ? val(prev.memo) : val;
+                return typeof next === 'string' ? { ...prev, memo: next } : prev;
+              })}
             />
 
 
           </div>
-        )}
 
         {/* === TAB B: HISTORY === */}
         {activeTab === 'history' && (
@@ -907,7 +862,7 @@ function App() {
               coachType={coachType}
               setCoachType={setCoachType}
               onClearData={clearData}
-              workouts={migratedWorkouts}
+              workouts={workouts}
               onShowFeedback={showFeedback}
               onSaveSettings={handleSaveSettings}
               geminiModel={geminiModel}
@@ -921,16 +876,7 @@ function App() {
         )}
       </main>
 
-      {/* Mobile QR Bridge, Sync & PWA Modal */}
-      <MobileSyncModal
-        isOpen={isSyncModalOpen}
-        onClose={() => setIsSyncModalOpen(false)}
-        onShowFeedback={showFeedback}
-        canInstallPwa={canInstallPwa}
-        isStandalone={isStandalone}
-        isIos={isIos}
-        onInstallPwa={installPwa}
-      />
+      {mobileSyncModal}
 
       <FloatingNav
         activeTab={activeTab}
@@ -945,7 +891,7 @@ function App() {
 
       {/* Floating Chat Bubble (LINE-style) - Visible on Home tab when chat is closed */}
       {!isChatOpen && activeTab === 'home' && (
-        <div className="fixed bottom-44 left-0 right-0 z-40 flex justify-center pointer-events-none">
+        <div className="coach-chat-bubble fixed bottom-44 left-0 right-0 z-40 flex justify-center pointer-events-none">
           <div className="w-full max-w-[480px] px-4 flex justify-end">
             <div className="relative pointer-events-auto">
               <button

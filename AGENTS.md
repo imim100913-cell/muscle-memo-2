@@ -26,19 +26,19 @@ npm run dev
 - **Training Science Engine** (`src/lib/trainingEngine.js`):
   - Calculates estimated 1RM (Epley formula), mesocycle progression (4-week periodization), RIR (Reps in Reserve) targets, and compound vs. isolation rest intervals.
 - **Mobile & PWA Capabilities**:
-  - `public/manifest.json` & `public/sw.js`: Full offline-ready PWA with network-first caching and `SKIP_WAITING` instant update detection (`src/hooks/useMobileFeatures.js`).
+  - `public/manifest.json` & `public/sw.js`: Offline-ready PWA with an immutable, versioned executable shell and explicit `SKIP_WAITING` update activation (`src/hooks/useMobileFeatures.js`).
   - **Screen Wake Lock API**: Prevents smartphone screen dimming during active sessions and interval timers.
   - **Haptics & Native Notifications** (`src/lib/audio.js`): Web Audio API synthetic countdown/alarm beeps, Web Vibration API haptics, and Service Worker notifications.
   - **Cross-Device Sync** (`src/services/mobileSync.js` & `src/components/Mobile/MobileSyncModal.jsx`):
     - Serverless compressed URL token transfer (`#sync=z...` using `CompressionStream('deflate-raw')`) with non-destructive workout session merging.
-    - Optional LAN bridge endpoints (`/api/network-info`, `/api/sync-state`) injected by `vite.config.js` during local dev/preview.
+    - LAN QR and automatic sync are disabled: this version has no verified secure LAN bridge. The legacy HTTP bridge endpoints have been removed. Use manual tokens/URLs or JSON backups. HTTPS and Web Locks are required; LAN HTTP is unsupported.
 
 ## 3. Data Storage & Conventions
 
 - **Local Storage Keys**:
-  - `muscle-memo-workouts`: Array of horizontal session records (`{ id, date, timestamp, part, exercise, set1_weight, set1_reps, set1_rir, set1_form, set1_interval, ... }`, up to 30 sets per exercise per day).
+  - `muscle-memo-workouts`: Unified 1-set-per-record array (`{ id, date, timestamp, part, exercise, setNum, weight, reps, rir, memo, formScore, interval, oneRM, isPR }`). Legacy horizontal records are automatically migrated to this format, supporting set-by-set free memo and non-destructive duplicate-free cross-device sync.
   - `muscle-memo-user`: User display name.
-  - `muscle-memo-gemini-key`: User's Gemini API key (stored strictly client-side).
+  - `muscle-memo-gemini-key`: User's Gemini API key (stored strictly client-side; excluded from default sync sharing for security).
   - `muscle-memo-gemini-model`: Selected Gemini model ID.
   - `muscle-memo-coach`: Active coach persona ID.
   - `muscle-memo-custom-exercises`: Custom exercises per body part (`胸`, `背中`, `肩`, `脚`, `腕`).

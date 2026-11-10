@@ -26,3 +26,10 @@ export function getLocalDateKey(timestamp = Date.now()) {
     return `${year}-${month}-${day}`;
 }
 
+
+// getRandomValues also works on LAN HTTP where randomUUID may be unavailable.
+export function createUniqueId() {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}

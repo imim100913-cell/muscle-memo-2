@@ -1,17 +1,17 @@
-/**
- * Anti-Gravity 2.0: PC <=> Smartphone Instant Bridge & Smart Data Merge Service
- * Supports:
- * 1. Local Wi-Fi (LAN) instant state transfer via Vite Mobile Bridge API (/api/sync-state)
- * 2. Serverless compressed URL / Share token transfer (CompressionStream + Base64URL)
- * 3. Non-destructive smart workout merging (combines PC and Smartphone logs without data loss)
- */
+import { decodeStoredValue } from '../lib/storageSchema.js';
+import { persistEntries, recoverPending } from '../lib/persistence.js';
+import { mergeWorkoutSets, migrateToFlatWorkouts } from '../lib/workoutMigration.js';
 
-export function collectLocalSyncData(includeApiKey = true) {
+// Manual transfer only. The legacy unauthenticated HTTP LAN bridge is disabled.
+// A future LAN bridge needs verified HTTPS, browser support and access control.
+
+export function collectLocalSyncData(includeApiKey = false) {
+  recoverPending(localStorage);
   const data = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (!key) continue;
-    if (key.startsWith('muscle-memo-')) {
+    if (key.startsWith('muscle-memo-') && !key.startsWith('muscle-memo-internal-')) {
       if (!includeApiKey && key === 'muscle-memo-gemini-key') continue;
       if (key === 'muscle-memo-timer-endtime') continue;
       const val = localStorage.getItem(key);
@@ -34,169 +34,56 @@ export function applySyncedData(incomingData, mode = 'merge') {
     throw new Error('同期データが空または不正です。');
   }
 
-  const updatedKeys = [];
+  recoverPending(localStorage);
+  if (Array.isArray(incomingData) || !['merge', 'overwrite'].includes(mode)) throw new Error('同期形式が不正です');
+  if (localStorage.getItem('muscle-memo-deletion-state') !== null) throw new Error('削除履歴があります。削除同期は未対応のため、自動同期・復元を中止しました。両端末の原本を退避して確認してください');
+  const entries = {};
   let mergedSessionsCount = 0;
-
-  if (mode === 'overwrite') {
-    Object.entries(incomingData).forEach(([k, v]) => {
-      if (k.startsWith('muscle-memo-') && typeof v === 'string') {
-        localStorage.setItem(k, v);
-        updatedKeys.push(k);
-      }
-    });
-    return { mergedSessionsCount: 0, updatedKeys };
-  }
-
-  // Smart Merge Mode
-  Object.entries(incomingData).forEach(([key, incomingRaw]) => {
-    if (!key.startsWith('muscle-memo-') || typeof incomingRaw !== 'string') return;
-
+  for (const [key, value] of Object.entries(incomingData)) {
+    if (!key.startsWith('muscle-memo-') || key.startsWith('muscle-memo-internal-') || typeof value !== 'string') throw new Error('同期キーまたは値が不正です');
+    if (/delet|tombstone/i.test(key)) throw new Error('削除同期は未対応です。同期を中止しました');
+    const parsed = decodeStoredValue(key, value);
+    if (key === 'muscle-memo-timer-endtime') continue;
     if (key === 'muscle-memo-workouts') {
-      try {
-        const incomingList = JSON.parse(incomingRaw);
-        const localRaw = localStorage.getItem('muscle-memo-workouts');
-        const localList = localRaw ? JSON.parse(localRaw) : [];
-
-        if (Array.isArray(incomingList) && Array.isArray(localList)) {
-          const map = new Map();
-
-          const countSets = (rec) => {
-            let count = 0;
-            for (let i = 1; i <= 30; i++) {
-              if (rec[`set${i}_weight`] !== undefined && rec[`set${i}_weight`] !== null && rec[`set${i}_weight`] !== '') {
-                count++;
-              }
-            }
-            return count;
-          };
-
-          localList.forEach((rec) => {
-            const k = `${rec.date || ''}_${rec.exercise || rec.id}`;
-            map.set(k, rec);
-          });
-
-          incomingList.forEach((inc) => {
-            const k = `${inc.date || ''}_${inc.exercise || inc.id}`;
-            const existing = map.get(k);
-            if (!existing) {
-              map.set(k, inc);
-            } else {
-              // Keep record with more logged sets, or newer timestamp
-              const incSets = countSets(inc);
-              const extSets = countSets(existing);
-              if (incSets > extSets || (incSets === extSets && (inc.timestamp || 0) > (existing.timestamp || 0))) {
-                map.set(k, inc);
-              }
-            }
-          });
-
-          const merged = Array.from(map.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-          mergedSessionsCount = merged.length;
-          localStorage.setItem('muscle-memo-workouts', JSON.stringify(merged));
-          updatedKeys.push(key);
-          return;
+      if (parsed.some?.(record => record?.deletedAt || record?.deleted || record?.isDeleted)) throw new Error('削除同期は未対応です');
+      const local = localStorage.getItem(key);
+      const flat = mergeWorkoutSets(local === null ? [] : JSON.parse(local), migrateToFlatWorkouts(parsed));
+      entries[key] = JSON.stringify(flat);
+      mergedSessionsCount = flat.length;
+    } else if (key === 'muscle-memo-custom-exercises' && mode === 'merge') {
+      const current = decodeStoredValue(key, localStorage.getItem(key) || '{}');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('種目設定が不正です');
+      const merged = { ...current };
+      for (const [part, exercises] of Object.entries(parsed)) {
+        if (!Array.isArray(exercises)) throw new Error('種目設定が不正です');
+        const unique = new Map();
+        for (const exercise of [...(current[part] || []), ...exercises]) {
+          const name = typeof exercise === 'string' ? exercise : exercise?.name;
+          if (typeof name !== 'string' || !name.trim()) throw new Error('種目名が不正です');
+          if (!unique.has(name.trim().toLowerCase())) unique.set(name.trim().toLowerCase(), exercise);
         }
-      } catch {
-        // Fallback to direct set if parsing fails
+        merged[part] = [...unique.values()];
       }
+      entries[key] = JSON.stringify(merged);
+    } else {
+      if (key === 'muscle-memo-gemini-key' && !parsed) continue;
+      entries[key] = value;
     }
-
-    if (key === 'muscle-memo-custom-exercises') {
-      try {
-        const incCustom = JSON.parse(incomingRaw);
-        const locRaw = localStorage.getItem('muscle-memo-custom-exercises');
-        const locCustom = locRaw ? JSON.parse(locRaw) : {};
-        const mergedCustom = { ...locCustom };
-
-        Object.keys(incCustom).forEach((part) => {
-          const listA = Array.isArray(locCustom[part]) ? locCustom[part] : [];
-          const listB = Array.isArray(incCustom[part]) ? incCustom[part] : [];
-          const seen = new Set();
-          const combined = [];
-          [...listA, ...listB].forEach((item) => {
-            const name = (typeof item === 'object' && item !== null ? item.name : String(item)).trim();
-            if (name && !seen.has(name.toLowerCase())) {
-              seen.add(name.toLowerCase());
-              combined.push(item);
-            }
-          });
-          mergedCustom[part] = combined;
-        });
-
-        localStorage.setItem('muscle-memo-custom-exercises', JSON.stringify(mergedCustom));
-        updatedKeys.push(key);
-        return;
-      } catch {
-        // Fallback
-      }
-    }
-
-    if (key === 'muscle-memo-gemini-key') {
-      // Do not overwrite an existing non-empty API key with an empty string
-      try {
-        const parsed = JSON.parse(incomingRaw);
-        if (!parsed) return;
-      } catch {
-        if (!incomingRaw) return;
-      }
-    }
-
-    localStorage.setItem(key, incomingRaw);
-    updatedKeys.push(key);
-  });
-
-  // Always mark onboarded after receiving synced state
-  localStorage.setItem('muscle-memo-onboarded', JSON.stringify(true));
-  return { mergedSessionsCount, updatedKeys };
+  }
+  persistEntries(entries);
+  return { mergedSessionsCount, updatedKeys: Object.keys(entries) };
 }
 
-/**
- * Queries the local Vite Mobile Bridge for LAN IP and sync snapshot status.
- */
-export async function fetchNetworkInfo() {
-  try {
-    const res = await fetch('/api/network-info', { cache: 'no-store' });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Pushes current device's localStorage state to the Vite Mobile Bridge server.
- */
-export async function pushSyncSnapshotToServer(sourceDevice = 'PC', includeApiKey = true) {
-  const data = collectLocalSyncData(includeApiKey);
-  const res = await fetch('/api/sync-state', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sourceDevice,
-      data
-    })
-  });
-  if (!res.ok) {
-    throw new Error('ローカル同期サーバーへの送信に失敗しました');
-  }
-  return await res.json();
-}
-
-/**
- * Pulls the latest shared snapshot from the Vite Mobile Bridge server.
- */
-export async function pullSyncSnapshotFromServer() {
-  const res = await fetch('/api/sync-state', { cache: 'no-store' });
-  if (!res.ok) {
-    throw new Error('ローカル同期サーバーからの取得に失敗しました');
-  }
-  return await res.json();
+export function restoreBackup(payload) {
+  if (payload?.application !== 'Anti-Gravity Workout Tracker' || payload.version !== '2.0' || !payload.data || Array.isArray(payload.data)) throw new Error('バックアップ形式が不正です');
+  const data = Object.fromEntries(Object.entries(payload.data).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]));
+  return applySyncedData(data, 'overwrite');
 }
 
 /**
  * Encodes sync data into a compact URL-safe token (using CompressionStream when supported).
  */
-export async function encodeSyncToken(includeApiKey = true) {
+export async function encodeSyncToken(includeApiKey = false) {
   const payloadObj = {
     v: 2,
     t: Date.now(),

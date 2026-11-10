@@ -5,6 +5,9 @@ import {
     LogOut, HelpCircle, Activity, Copy, ShieldAlert, Smartphone, QrCode, Sun 
 } from 'lucide-react';
 import { cn, getLocalDateKey } from '../../lib/utils';
+import { recoverPending } from '../../lib/persistence.js';
+import { restoreBackup } from '../../services/mobileSync';
+import { migrateToFlatWorkouts } from '../../lib/workoutMigration';
 import { GeminiService, parseGeminiError, GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from '../../services/gemini';
 import { runSystemDiagnostics } from '../../services/diagnostics';
 
@@ -86,7 +89,8 @@ export default function SettingsView({
             return;
         }
         if (onSaveSettings) {
-            onSaveSettings(nameInput, keyInput, selectedCoach, selectedModel);
+            const result = onSaveSettings(nameInput, keyInput, selectedCoach, selectedModel);
+            if (result?.success === false) return;
         } else {
             setUserName(nameInput);
             setApiKey(keyInput);
@@ -120,7 +124,7 @@ export default function SettingsView({
                 description: "Gemini API との疎通が正常に確認できました。AIコーチング機能が利用可能です。"
             });
         } catch (error) {
-            console.error("Test connection failed:", error);
+            console.error("Test connection failed");
             const parsed = parseGeminiError(error);
             setTestStatus({
                 success: false,
@@ -141,7 +145,7 @@ export default function SettingsView({
             const res = await runSystemDiagnostics(keyInput);
             setDiagResults(res);
         } catch (e) {
-            console.error("Diagnostics failed:", e);
+            console.error("Diagnostics failed");
             alert("診断の実行中にエラーが発生しました: " + e.message);
         } finally {
             setIsDiagRunning(false);
@@ -156,10 +160,12 @@ export default function SettingsView({
     };
 
     const handleExportBackup = () => {
+        try { recoverPending(localStorage); }
+        catch { alert("復旧が完了していません。原本を保護するためバックアップ出力を停止しています。"); return; }
         const backupData = {};
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && key.startsWith('muscle-memo-')) {
+            if (key && key.startsWith('muscle-memo-') && !key.startsWith('muscle-memo-internal-') && key !== 'muscle-memo-gemini-key') {
                 const val = localStorage.getItem(key);
                 if (val !== null) {
                     backupData[key] = val;
@@ -194,60 +200,69 @@ export default function SettingsView({
         reader.onload = (event) => {
             try {
                 const parsed = JSON.parse(event.target.result);
-                if (!parsed || parsed.application !== "Anti-Gravity Workout Tracker" || !parsed.data) {
-                    throw new Error("正しいアプリのバックアップファイルではありません。");
-                }
+                restoreBackup(parsed);
 
-                Object.keys(parsed.data).forEach(k => {
-                    localStorage.setItem(k, parsed.data[k]);
-                });
-
-                alert("設定とデータを復元しました。アプリを再読み込みします。");
+                alert("設定とデータを非破壊で復元しました。アプリを再読み込みします。");
                 window.location.reload();
             } catch (err) {
-                console.error("Import backup failed:", err);
-                alert("バックアップファイルの復元に失敗しました。正しいJSONファイルを選択してください。(詳細: " + err.message + ")");
+
+                alert("バックアップファイルの復元に失敗しました。正しいJSONファイルを選択してください。(詳細: " + (err instanceof SyntaxError ? "JSON形式が不正です" : err.message) + ")");
             }
         };
         reader.readAsText(file);
     };
 
     const handleExportCSV = () => {
-        if (!workouts || workouts.length === 0) {
+        const flatWorkouts = migrateToFlatWorkouts(workouts);
+        if (!flatWorkouts || flatWorkouts.length === 0) {
             if (onShowFeedback) onShowFeedback("出力するデータがありません。");
             else alert("出力するデータがありません。");
             return;
         }
 
-        const headers = ["日付", "種目", "部位"];
-        for (let i = 1; i <= 30; i++) {
-            headers.push(`${i}セット目重量_kg`);
-            headers.push(`${i}セット目回数_Reps`);
-            headers.push(`${i}セット目余力_RIR`);
-            headers.push(`${i}セット目フォーム品質_FormQuality`);
-            headers.push(`${i}セット目インターバル_秒`);
-        }
+        const headers = [
+            "日付",
+            "種目",
+            "部位",
+            "セット番号",
+            "重量_kg",
+            "回数_Reps",
+            "推定1RM_kg",
+            "余力_RIR",
+            "自由メモ",
+            "フォーム品質",
+            "インターバル_秒",
+            "自己ベスト"
+        ];
 
-        const rows = workouts.map(w => {
-            const row = [
+        const escapeCSV = (val) => {
+            if (val === undefined || val === null) return '""';
+            const str = String(val).replace(/"/g, '""');
+            return `"${str}"`;
+        };
+
+        const rows = flatWorkouts.map((w, idx) => {
+            const formLabel = w.formScore === 'perfect' ? 'Perfect' : w.formScore === 'good' ? 'Good' : (w.formScore === 'fail' ? 'Fail' : (w.formScore || ''));
+            return [
                 w.date || getLocalDateKey(w.timestamp),
-                w.exercise,
-                w.part || ""
-            ];
-            for (let i = 1; i <= 30; i++) {
-                row.push(w[`set${i}_weight`] !== undefined && w[`set${i}_weight`] !== null ? w[`set${i}_weight`] : "");
-                row.push(w[`set${i}_reps`] !== undefined && w[`set${i}_reps`] !== null ? w[`set${i}_reps`] : "");
-                row.push(w[`set${i}_rir`] !== undefined && w[`set${i}_rir`] !== null ? w[`set${i}_rir`] : "");
-                row.push(w[`set${i}_form`] || "");
-                row.push(w[`set${i}_interval`] !== undefined && w[`set${i}_interval`] !== null ? w[`set${i}_interval`] : "");
-            }
-            return row;
+                w.exercise || "",
+                w.part || "",
+                w.setNum !== undefined ? w.setNum : (idx + 1),
+                w.weight !== undefined ? w.weight : "",
+                w.reps !== undefined ? w.reps : "",
+                w.oneRM !== undefined ? w.oneRM : "",
+                w.rir ?? null,
+                w.memo || "",
+                formLabel,
+                w.interval !== undefined ? w.interval : 120,
+                w.isPR ? "★PR" : ""
+            ].map(escapeCSV).join(",");
         });
 
         const csvContent = [
-            headers.map(h => `"${h}"`).join(","),
-            ...rows.map(r => r.map(val => `"${val}"`).join(","))
-        ].join("\n");
+            headers.map(escapeCSV).join(","),
+            ...rows
+        ].join("\r\n");
 
         const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -257,6 +272,7 @@ export default function SettingsView({
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        if (onShowFeedback) onShowFeedback("CSVファイルを書き出しました！");
     };
 
     return (
@@ -276,7 +292,7 @@ export default function SettingsView({
                     </span>
                 </div>
                 <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
-                    QRコードを使ってスマホで最新版を今すぐ開いたり、PC⇔スマホ間で設定・トレーニング履歴をワンタップで双方向同期できます。
+                    HTTPSとWeb Locks対応ブラウザで利用してください。設定・履歴はURL・コードまたはJSONバックアップで手動移行できます。この版ではLAN QR接続・自動同期は利用できません。
                 </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -285,7 +301,7 @@ export default function SettingsView({
                         onClick={onOpenMobileSync}
                         className="py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 active:scale-95 shadow-md"
                     >
-                        <QrCode size={15} /> QR接続・スマホ同期を開く
+                        <QrCode size={15} /> スマホへのデータ移行を開く
                     </button>
 
                     <button
@@ -294,7 +310,14 @@ export default function SettingsView({
                             if (onCheckUpdate) {
                                 const res = await onCheckUpdate();
                                 if (onShowFeedback) {
-                                    onShowFeedback(res === 'update_found' ? '新しいバージョンが見つかりました！' : 'すでに最新バージョンを使用中です✨');
+                                    const notices = {
+                                        update_found: '新しいバージョンが見つかりました！',
+                                        checking: '新しいバージョンを確認中です。準備ができると更新ボタンを表示します。',
+                                        up_to_date: 'すでに最新バージョンを使用中です✨',
+                                        check_failed: '更新状況を確認できません。接続を確認して再試行してください。',
+                                        unavailable: 'この環境では更新状況を確認できません。'
+                                    };
+                                    onShowFeedback(notices[res] || notices.unavailable);
                                 }
                             }
                         }}
@@ -550,7 +573,7 @@ export default function SettingsView({
                     <Cloud size={16} className="text-blue-600" /> 設定のバックアップと復元
                 </h3>
                 <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
-                    設定データやワークアウト履歴をJSONファイルとしてローカルに書き出し、または書き出したファイルから設定を復元することができます。端末の機種変更や別ブラウザへのデータ移行時にご利用ください。
+                    設定データやワークアウト履歴をJSONファイルとしてローカルに書き出し、または書き出したファイルから設定を復元することができます。記録は追加方式で復元し、同一IDの競合は停止します。端末の機種変更や別ブラウザへのデータ移行時にご利用ください。
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                     <button
@@ -816,18 +839,18 @@ export default function SettingsView({
 
                 <div className="glass p-4 rounded-xl border border-red-200 bg-red-50/50">
                     <p className="text-xs text-slate-600 mb-4 font-semibold">
-                        すべてのデータを完全に削除します。<br />この操作は取り消せません。
+                        端末の記録と設定を初期化します。復旧用の原本は保全します。<br />削除同期は未対応のため、初期化後の同期・復元は停止します。
                     </p>
                     <button
                         onClick={() => {
-                            if (window.confirm("本当に全データを消去しますか？この操作は取り消せません。")) {
-                                onClearData();
-                                if (onShowFeedback) onShowFeedback("データを完全に消去しました。");
+                            if (window.confirm("記録と設定を初期化しますか？復旧用原本は保全します。初期化後は削除情報を確認するまで同期・復元を停止します。")) {
+                                const result = onClearData();
+                                if (result?.success && onShowFeedback) onShowFeedback("記録と設定を初期化しました。");
                             }
                         }}
                         className="w-full py-3 bg-red-50 hover:bg-red-500 text-red-700 hover:text-white border border-red-200 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2"
                     >
-                        <Trash2 size={16} /> 全データを消去
+                        <Trash2 size={16} /> 記録と設定を初期化
                     </button>
                 </div>
             </section>
