@@ -1,9 +1,12 @@
-const CACHE_VERSION = 'muscle-memo-p0-02-0bebeb22db1a40bb';
+const CACHE_VERSION = 'muscle-memo-p0-02-b4acaa9f90f26f39';
 const STATIC_ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './icon.svg',
+  './icon-192.png',
+  './icon-512.png',
+  './icon-maskable-512.png',
   './coach_all_might.png',
   './coach_demon.png',
   './coach_gentle.png',

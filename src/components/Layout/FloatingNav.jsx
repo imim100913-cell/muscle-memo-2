@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars */
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Home, BarChart2, Settings, Timer, CheckCircle2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { unlockAudio } from '../../lib/audio';
@@ -34,29 +34,32 @@ export default function FloatingNav({ activeTab, setActiveTab, workoutState = 's
     };
 
     return (
-        <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center pointer-events-none">
-            <div className="w-full max-w-[480px] px-4 pb-6 pointer-events-auto">
+        <div className="app-footer fixed bottom-0 left-0 right-0 z-50 flex justify-center pointer-events-none">
+            <div className="app-footer-content w-full max-w-[480px] px-3 sm:px-4 pointer-events-auto">
 
                 {/* Floating Action Panel (2nd Tier) - Only on Home Tab during Active Session */}
                 {activeTab === 'home' && workoutState === 'active' && (
-                    <div className="flex items-center justify-between mb-4 gap-4">
+                    <div className="flex items-center justify-between mb-3 gap-2">
                         {/* Timer Widget */}
                         <div className={cn(
-                            "flex-1 rounded-2xl p-2 flex items-center justify-between h-14 transition-all duration-300",
+                            "flex-1 min-w-0 rounded-2xl p-1 flex items-center justify-between h-14 transition-all duration-300",
                             isTimerRunning 
                                 ? "bg-gradient-to-r from-blue-600 to-indigo-600 border border-blue-500/30 shadow-lg shadow-blue-500/20" 
                                 : "glass"
                         )}>
-                            <button onClick={toggleTimer} className={cn("p-2 rounded-xl transition-colors", isTimerRunning ? "text-white bg-white/15" : "text-slate-400")}>
+                            <button onClick={toggleTimer} aria-label="インターバルタイマーの開始・一時停止" className={cn("min-w-12 min-h-12 flex items-center justify-center rounded-xl transition-colors", isTimerRunning ? "text-white bg-white/15" : "text-slate-400")}>
                                 <Timer size={24} />
                             </button>
-                            <div className="flex-1 text-center font-mono text-xl font-bold">
+                            <div className="flex-1 min-w-0 text-center font-mono text-xl font-bold">
                                 <input
                                     type="number"
+                                    inputMode="numeric"
+                                    aria-label="タイマー残り秒数"
+                                    min="0"
                                     value={restTimer}
                                     onChange={(e) => handleTimerChange(e.target.value)}
                                     className={cn(
-                                        "bg-transparent w-full text-center outline-none font-extrabold",
+                                        "bg-transparent w-full min-h-12 text-center outline-none font-extrabold",
                                         isTimerRunning ? "text-white text-2xl" : "text-slate-800"
                                     )}
                                 />
@@ -68,7 +71,7 @@ export default function FloatingNav({ activeTab, setActiveTab, workoutState = 's
                         <button
                             onClick={handleRecord}
                             className={cn(
-                                "h-14 px-8 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold shadow-lg shadow-blue-500/20 flex items-center gap-2 transition-all transform",
+                                "h-14 px-5 shrink-0 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold shadow-lg shadow-blue-500/20 flex items-center gap-2 transition-all transform",
                                 isPressed ? "scale-90 bg-green-500" : "active:scale-95"
                             )}
                         >
@@ -79,7 +82,7 @@ export default function FloatingNav({ activeTab, setActiveTab, workoutState = 's
                 )}
 
                 {/* Navigation Bar (1st Tier) */}
-                <nav className="glass rounded-full h-16 flex items-center justify-around px-2 relative overflow-hidden">
+                <nav aria-label="メインナビゲーション" className="glass rounded-full h-16 flex items-center justify-around px-2 relative overflow-hidden">
                     <NavIcon
                         icon={Home}
                         label="ホーム"

@@ -891,7 +891,7 @@ function App() {
 
       {/* Floating Chat Bubble (LINE-style) - Visible on Home tab when chat is closed */}
       {!isChatOpen && activeTab === 'home' && (
-        <div className="fixed bottom-44 left-0 right-0 z-40 flex justify-center pointer-events-none">
+        <div className="coach-chat-bubble fixed bottom-44 left-0 right-0 z-40 flex justify-center pointer-events-none">
           <div className="w-full max-w-[480px] px-4 flex justify-end">
             <div className="relative pointer-events-auto">
               <button
